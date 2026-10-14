@@ -33,12 +33,13 @@ data class ChipInfo(
     val chip: String,
     val mac: String,
     val flashSize: Int?,
-    val revision: String?,
+    /** major * 100 + minor */
+    val revision: Int?,
     /** Null if the chip doesn't report it (e.g. ESP32, ESP8266). */
     val security: List<Pair<String, Boolean>>?,
 )
 
-enum class Page { FLASH, DEVICE, MONITOR }
+enum class Page { FLASH, DEVICE, EFUSE, MONITOR }
 
 data class UiState(
     val devices: List<UsbSerialDriver> = emptyList(),
@@ -49,6 +50,9 @@ data class UiState(
     val offsetText: String = "0x0",
     val readOffsetText: String = "0x0",
     val readSizeText: String = "",
+    /** Null until read. */
+    val efuses: List<EfuseField>? = null,
+    val efuseFilter: String = "",
     val baudRate: Int = DEFAULT_FLASH_BAUD,
     val monitorAfterFlash: Boolean = true,
     val busy: Boolean = false,
@@ -110,6 +114,8 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     fun selectPage(page: Page) = _state.update { it.copy(page = page) }
 
     fun clearMonitor() = _state.update { it.copy(monitorLines = emptyList()) }
+
+    fun setEfuseFilter(text: String) = _state.update { it.copy(efuseFilter = text) }
 
     fun toggleLog() = _state.update { it.copy(showLog = !it.showLog) }
 
@@ -200,6 +206,17 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         status("Read ${size / 1024} KB in %.1f s (%.0f kbit/s)".format(seconds, size * 8 / 1000.0 / seconds))
     }
 
+    fun readEfuses() = runTask {
+        val s = flasher ?: error("Not connected")
+        val revision = _state.value.chipInfo?.revision ?: error("Chip revision unknown")
+        ensureBootloader(s)
+        status("Reading eFuses…")
+        val start = SystemClock.elapsedRealtime()
+        val efuses = s.readEfuses(revision, progress)
+        _state.update { it.copy(efuses = efuses) }
+        status("Read ${efuses.size} eFuse fields in %.1f s".format((SystemClock.elapsedRealtime() - start) / 1000.0))
+    }
+
     /** Resets the target into its application and shows its serial output. */
     fun startMonitor() {
         val s = flasher ?: return
@@ -227,7 +244,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         flasher?.close()
         flasher = null
         inBootloader = false
-        _state.update { it.copy(connectedDevice = null, chipInfo = null, progress = 0f) }
+        _state.update { it.copy(connectedDevice = null, chipInfo = null, efuses = null, progress = 0f) }
     }
 
     /**

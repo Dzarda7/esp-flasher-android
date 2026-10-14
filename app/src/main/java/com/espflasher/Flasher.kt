@@ -2,6 +2,16 @@ package com.espflasher
 
 import java.io.Closeable
 
+/** One eFuse field; [value] is LSB first. */
+data class EfuseField(
+    val name: String,
+    val block: Int,
+    val bits: Int,
+    val value: ByteArray,
+    val writeProtected: Boolean,
+    val readProtected: Boolean,
+)
+
 /**
  * One esp-serial-flasher loader (flasher_jni.c) talking over [bridge].
  * Not thread-safe: call everything from the same worker thread.
@@ -36,11 +46,11 @@ class Flasher(val bridge: UsbSerialBridge) : Closeable {
 
     fun reset() = nativeReset(handle)
 
-    /** Revision as "vMAJOR.MINOR". */
-    fun chipRevision(): String {
+    /** Revision as major * 100 + minor (v1.2 -> 102). */
+    fun chipRevision(): Int {
         val rev = IntArray(1)
         check(nativeGetChipRevision(handle, rev), "read chip revision")
-        return "v${rev[0] / 100}.${rev[0] % 100}"
+        return rev[0]
     }
 
     /** Named security flags. */
@@ -62,6 +72,33 @@ class Flasher(val bridge: UsbSerialBridge) : Closeable {
             onProgress.onProgress(done, size)
         }
         return data
+    }
+
+    /** Reads every eFuse field of the chip; one chip round-trip per field word. */
+    fun readEfuses(revision: Int, onProgress: ProgressListener): List<EfuseField> {
+        val count = nativeEfuseFieldCount(handle, revision)
+        if (count < 0) check(-count, "load eFuse table")
+
+        val meta = IntArray(4) // block, bits, wr_dis bit, rd_dis bit
+        val protectBits = IntArray(count * 2)
+        val fields = (0 until count).map { i ->
+            val name = nativeEfuseFieldInfo(handle, i, meta)
+            val value = ByteArray((meta[1] + 7) / 8)
+            check(nativeEfuseReadField(handle, i, value), "read eFuse $name")
+            protectBits[i * 2] = meta[2]
+            protectBits[i * 2 + 1] = meta[3]
+            onProgress.onProgress(i + 1, count)
+            EfuseField(name, meta[0], meta[1], value, writeProtected = false, readProtected = false)
+        }
+
+        // A field's protection is one bit of the WR_DIS / RD_DIS fields.
+        val wrDis = fields.find { it.name == "WR_DIS" }?.value
+        val rdDis = fields.find { it.name == "RD_DIS" }?.value
+        fun isSet(v: ByteArray?, bit: Int) =
+            v != null && bit != NO_BIT && bit / 8 < v.size && (v[bit / 8].toInt() shr (bit % 8)) and 1 == 1
+        return fields.mapIndexed { i, f ->
+            f.copy(writeProtected = isSet(wrDis, protectBits[i * 2]), readProtected = isSet(rdDis, protectBits[i * 2 + 1]))
+        }
     }
 
     override fun close() {
@@ -100,6 +137,9 @@ class Flasher(val bridge: UsbSerialBridge) : Closeable {
     private external fun nativeGetChipRevision(handle: Long, out: IntArray): Int
     private external fun nativeGetSecurityInfo(handle: Long, out: IntArray): Int
     private external fun nativeEraseFlash(handle: Long): Int
+    private external fun nativeEfuseFieldCount(handle: Long, revision: Int): Int
+    private external fun nativeEfuseFieldInfo(handle: Long, index: Int, meta: IntArray): String
+    private external fun nativeEfuseReadField(handle: Long, index: Int, out: ByteArray): Int
     private external fun nativeReadFlash(handle: Long, out: ByteArray, offset: Int, chunkOffset: Int, chunkSize: Int): Int
 
     companion object {
@@ -114,6 +154,7 @@ class Flasher(val bridge: UsbSerialBridge) : Closeable {
         )
 
         private const val READ_CHUNK = 64 * 1024
+        private const val NO_BIT = 0xFFFF
 
         // Order matches nativeGetSecurityInfo() in flasher_jni.c.
         private val SECURITY_FLAGS = listOf(

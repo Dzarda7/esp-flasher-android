@@ -113,6 +113,11 @@ fun FlasherScreen(vm: FlasherViewModel) {
                 text = { Text("Device") },
             )
             Tab(
+                selected = state.page == Page.EFUSE,
+                onClick = { vm.selectPage(Page.EFUSE) },
+                text = { Text("eFuse") },
+            )
+            Tab(
                 selected = state.page == Page.MONITOR,
                 onClick = { vm.selectPage(Page.MONITOR) },
                 text = { Text(if (state.monitoring) "Monitor ●" else "Monitor") },
@@ -121,6 +126,7 @@ fun FlasherScreen(vm: FlasherViewModel) {
         when (state.page) {
             Page.FLASH -> FlashPage(state, vm)
             Page.DEVICE -> DevicePage(state, vm)
+            Page.EFUSE -> EfusePage(state, vm)
             Page.MONITOR -> MonitorPage(state, vm)
         }
     }
@@ -213,7 +219,7 @@ private fun ColumnScope.DevicePage(state: UiState, vm: FlasherViewModel) {
     }
 
     Column(Modifier.verticalScroll(rememberScrollState()).weight(1f, fill = false)) {
-        InfoRow("Revision", info.revision ?: "unknown")
+        InfoRow("Revision", info.revision?.let { "v${it / 100}.${it % 100}" } ?: "unknown")
         Text("Security", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.titleSmall)
         if (info.security == null) {
             Text("Not reported by this chip", style = MaterialTheme.typography.bodySmall)
@@ -267,6 +273,92 @@ private fun ColumnScope.DevicePage(state: UiState, vm: FlasherViewModel) {
             dismissButton = { TextButton(onClick = { confirmErase = false }) { Text("Cancel") } },
         )
     }
+}
+
+@Composable
+private fun ColumnScope.EfusePage(state: UiState, vm: FlasherViewModel) {
+    val efuses = state.efuses
+    if (efuses == null) {
+        Button(onClick = vm::readEfuses, enabled = !state.busy) { Text("Read eFuses") }
+        Progress(state)
+        StatusAndLog(state, vm)
+        return
+    }
+
+    val context = LocalContext.current
+    val filter = state.efuseFilter.trim()
+    val shown = if (filter.isEmpty()) efuses else efuses.filter { it.name.contains(filter, ignoreCase = true) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = state.efuseFilter,
+            onValueChange = vm::setEfuseFilter,
+            placeholder = { Text("Search ${efuses.size} fields") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = {
+            context.getSystemService(ClipboardManager::class.java)
+                .setPrimaryClip(ClipData.newPlainText("eFuse summary", efuseSummary(efuses)))
+        }) { Text("Copy") }
+        TextButton(onClick = vm::readEfuses, enabled = !state.busy) { Text("Reload") }
+    }
+    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+        shown.forEachIndexed { i, f ->
+            if (i == 0 || shown[i - 1].block != f.block) {
+                item {
+                    Text(
+                        "BLOCK${f.block}",
+                        Modifier.padding(top = 12.dp, bottom = 4.dp),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            item { EfuseRow(f) }
+        }
+    }
+    Progress(state)
+    StatusAndLog(state, vm)
+}
+
+@Composable
+private fun EfuseRow(f: EfuseField) {
+    val value = f.displayValue()
+    val flags = listOfNotNull(
+        "write-protected".takeIf { f.writeProtected },
+        "read-protected".takeIf { f.readProtected },
+    )
+    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Row {
+            Text(f.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            if (f.bits <= 32) Text(value, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+        }
+        if (f.bits > 32) Text(value, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        if (flags.isNotEmpty()) {
+            Text(
+                flags.joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
+    }
+}
+
+/** 1 bit: Yes/No; up to 32 bits: number; longer: hex bytes as stored (LSB first). */
+private fun EfuseField.displayValue(): String {
+    if (readProtected) return "hidden"
+    if (bits == 1) return if (value[0].toInt() and 1 == 1) "Yes" else "No"
+    if (bits <= 32) {
+        var v = 0L
+        value.forEachIndexed { i, b -> v = v or ((b.toLong() and 0xFF) shl (8 * i)) }
+        return if (bits <= 4) "$v" else "$v (0x%X)".format(v)
+    }
+    return value.joinToString(" ") { "%02x".format(it) }
+}
+
+private fun efuseSummary(efuses: List<EfuseField>): String = efuses.joinToString("\n") { f ->
+    val flags = (if (f.writeProtected) " [WP]" else "") + (if (f.readProtected) " [RP]" else "")
+    "BLOCK%-2d %-40s %s%s".format(f.block, f.name, f.displayValue(), flags)
 }
 
 @Composable
