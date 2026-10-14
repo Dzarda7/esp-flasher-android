@@ -15,6 +15,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +45,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -68,6 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -248,35 +251,42 @@ private fun DeviceHeader(state: UiState, vm: FlasherViewModel) {
 
 @Composable
 private fun ColumnScope.FlashPage(state: UiState, vm: FlasherViewModel) {
-    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let(vm::setFirmware)
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) vm.addImages(uris)
     }
 
+    state.images.forEachIndexed { i, img ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(img.name, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            OutlinedTextField(
+                value = img.offsetText,
+                onValueChange = { vm.setImageOffset(i, it) },
+                singleLine = true,
+                enabled = !state.busy,
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
+                modifier = Modifier.width(120.dp),
+            )
+            TextButton(onClick = { vm.removeImage(i) }, enabled = !state.busy) { Text("✕") }
+        }
+    }
     OutlinedButton(
-        onClick = { pickFile.launch(arrayOf("*/*")) },
+        onClick = { pickFiles.launch(arrayOf("*/*")) },
         enabled = !state.busy,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text(state.firmwareName ?: "Choose firmware .bin", maxLines = 1)
-    }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = state.offsetText,
-            onValueChange = vm::setOffset,
-            label = { Text("Offset") },
-            singleLine = true,
-            enabled = !state.busy,
-            modifier = Modifier.weight(1f),
-        )
-        BaudRatePicker(state.baudRate, enabled = !state.busy, onSelect = vm::setBaudRate)
+        Text(if (state.images.isEmpty()) "+ Add binaries" else "+ Add more")
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = state.monitorAfterFlash, onCheckedChange = vm::setMonitorAfterFlash)
         Text("Monitor after flash", Modifier.weight(1f))
-        Button(
-            onClick = vm::flash,
-            enabled = !state.busy && state.chipInfo != null && state.firmwareUri != null,
-        ) { Text("Flash") }
+        BaudRatePicker(state.baudRate, enabled = !state.busy, onSelect = vm::setBaudRate)
+    }
+    Button(
+        onClick = vm::flash,
+        enabled = !state.busy && state.chipInfo != null && state.images.isNotEmpty(),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.images.size > 1) "Flash ${state.images.size} files" else "Flash")
     }
     Progress(state)
     StatusAndLog(state, vm)

@@ -41,13 +41,14 @@ data class ChipInfo(
 
 enum class Page { FLASH, DEVICE, EFUSE, MONITOR }
 
+/** One binary to flash and where. */
+data class FlashImage(val uri: Uri, val name: String, val offsetText: String)
+
 data class UiState(
     val devices: List<UsbSerialDriver> = emptyList(),
     val connectedDevice: String? = null,
     val chipInfo: ChipInfo? = null,
-    val firmwareUri: Uri? = null,
-    val firmwareName: String? = null,
-    val offsetText: String = "0x0",
+    val images: List<FlashImage> = emptyList(),
     val readOffsetText: String = "0x0",
     val readSizeText: String = "",
     /** Null until read. */
@@ -102,7 +103,11 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setOffset(text: String) = _state.update { it.copy(offsetText = text) }
+    fun setImageOffset(index: Int, text: String) = _state.update {
+        it.copy(images = it.images.mapIndexed { i, img -> if (i == index) img.copy(offsetText = text) else img })
+    }
+
+    fun removeImage(index: Int) = _state.update { it.copy(images = it.images.filterIndexed { i, _ -> i != index }) }
 
     fun setReadOffset(text: String) = _state.update { it.copy(readOffsetText = text) }
 
@@ -122,11 +127,46 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleLog() = _state.update { it.copy(showLog = !it.showLog) }
 
-    fun setFirmware(uri: Uri) {
-        val name = getApplication<Application>().contentResolver
-            .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-            ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
-        _state.update { it.copy(firmwareUri = uri, firmwareName = name ?: uri.lastPathSegment) }
+    fun addImages(uris: List<Uri>) {
+        val resolver = getApplication<Application>().contentResolver
+        val names = uris.map { uri ->
+            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: uri.lastPathSegment ?: "image.bin"
+        }
+        _state.update { st ->
+            val allNames = st.images.map { it.name } + names
+            var apps = st.images.count { kind(it.name) == ImageKind.APP }
+            val added = uris.zip(names) { uri, name ->
+                FlashImage(uri, name, "0x%X".format(guessOffset(name, st.chipInfo?.chip, allNames, apps)))
+                    .also { if (kind(name) == ImageKind.APP) apps++ }
+            }
+            st.copy(images = st.images + added)
+        }
+    }
+
+    private enum class ImageKind { BOOTLOADER, PARTITIONS, APP }
+
+    private fun kind(name: String) = name.lowercase().let {
+        when {
+            "bootloader" in it -> ImageKind.BOOTLOADER
+            "partition" in it -> ImageKind.PARTITIONS
+            else -> ImageKind.APP
+        }
+    }
+
+    /**
+     * Default offset from the usual ESP-IDF file names; the user can always edit it.
+     * Alongside a bootloader or partition table an app goes to 0x10000; on its own the
+     * first one is taken as a merged image at 0x0.
+     */
+    private fun guessOffset(name: String, chip: String?, allNames: List<String>, appsBefore: Int) = when (kind(name)) {
+        ImageKind.BOOTLOADER -> when (chip) {
+            "ESP32", "ESP32-S2" -> 0x1000
+            "ESP32-C5", "ESP32-P4" -> 0x2000
+            else -> 0x0
+        }
+        ImageKind.PARTITIONS -> 0x8000
+        ImageKind.APP -> if (appsBefore == 0 && allNames.all { kind(it) == ImageKind.APP }) 0x0 else 0x10000
     }
 
     fun connect(driver: UsbSerialDriver) = runTask {
@@ -164,17 +204,29 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
 
     fun flash() = runTask {
         val s = flasher ?: error("Not connected")
-        val uri = _state.value.firmwareUri ?: error("No firmware selected")
-        val offset = parseOffset(_state.value.offsetText)
-        val data = getApplication<Application>().contentResolver.openInputStream(uri)
-            ?.use { it.readBytes() } ?: error("Cannot read firmware file")
+        val images = _state.value.images.ifEmpty { error("No binaries selected") }
+        val resolver = getApplication<Application>().contentResolver
+        val loaded = images.map { img ->
+            val data = resolver.openInputStream(img.uri)?.use { it.readBytes() } ?: error("Cannot read ${img.name}")
+            Triple(img.name, parseOffset(img.offsetText), data)
+        }
+        val total = loaded.sumOf { it.third.size }
 
         ensureBootloader(s)
-        status("Flashing ${data.size / 1024} KB at 0x%X…".format(offset))
         val start = SystemClock.elapsedRealtime()
-        s.flash(data, offset, progress)
+        var done = 0
+        loaded.forEachIndexed { i, (name, offset, data) ->
+            status("Flashing $name (${i + 1}/${loaded.size}) at 0x%X…".format(offset))
+            s.flash(data, offset) { written, _ ->
+                _state.update { it.copy(progress = (done + written).toFloat() / total) }
+            }
+            done += data.size
+        }
         val seconds = (SystemClock.elapsedRealtime() - start) / 1000.0
-        status("Flashed and verified in %.1f s (%.0f kbit/s)".format(seconds, data.size * 8 / 1000.0 / seconds))
+        status(
+            "Flashed and verified ${loaded.size} file${if (loaded.size == 1) "" else "s"}, ${total / 1024} KB " +
+                "in %.1f s (%.0f kbit/s)".format(seconds, total * 8 / 1000.0 / seconds),
+        )
 
         if (_state.value.monitorAfterFlash) {
             launchMonitor(s)
