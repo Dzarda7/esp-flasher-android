@@ -26,10 +26,9 @@ typedef struct {
     jmethodID m_read;
     jmethodID m_set_lines;
     jmethodID m_set_baud;
-    jmethodID m_is_usb_jtag;
-    jmethodID m_reconnect;
     jmethodID m_log;
 
+    bool is_usb_jtag;         /*!< Built-in USB-Serial-JTAG: re-enumerates on reset */
     int64_t time_end_ms;
 } android_port_t;
 

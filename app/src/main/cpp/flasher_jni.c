@@ -1,5 +1,5 @@
 /*
- * JNI entry points for com.espflasher.NativeFlasher.
+ * JNI entry points for com.espflasher.Flasher.
  *
  * A session owns one port + loader. All calls on a session must be serialized
  * (the Kotlin side runs them on a single worker thread).
@@ -26,7 +26,7 @@ static session_t *session_get(JNIEnv *env, jlong handle)
     return s;
 }
 
-#define JNI_FN(name) Java_com_espflasher_NativeFlasher_##name
+#define JNI_FN(name) Java_com_espflasher_Flasher_##name
 
 JNIEXPORT jlong JNICALL JNI_FN(nativeCreate)(JNIEnv *env, jobject thiz, jobject bridge)
 {
@@ -53,16 +53,14 @@ JNIEXPORT void JNICALL JNI_FN(nativeDestroy)(JNIEnv *env, jobject thiz, jlong ha
     free(s);
 }
 
-JNIEXPORT jint JNICALL JNI_FN(nativeConnect)(JNIEnv *env, jobject thiz, jlong handle, jboolean use_stub)
+JNIEXPORT jint JNICALL JNI_FN(nativeConnect)(JNIEnv *env, jobject thiz, jlong handle)
 {
     (void)thiz;
     session_t *s = session_get(env, handle);
     esp_loader_connect_args_t args = ESP_LOADER_CONNECT_DEFAULT();
 
-    esp_loader_error_t err = use_stub
-                             ? esp_loader_connect_with_stub(&s->loader, &args)
-                             : esp_loader_connect(&s->loader, &args);
-    s->stub_running = use_stub && err == ESP_LOADER_SUCCESS;
+    esp_loader_error_t err = esp_loader_connect_with_stub(&s->loader, &args);
+    s->stub_running = err == ESP_LOADER_SUCCESS;
     return err;
 }
 

@@ -45,18 +45,6 @@ static void set_lines(android_port_t *p, bool dtr, bool rts)
     clear_exception(p->env);
 }
 
-static bool is_usb_jtag(android_port_t *p)
-{
-    jboolean r = (*p->env)->CallBooleanMethod(p->env, p->bridge, p->m_is_usb_jtag);
-    return !clear_exception(p->env) && r;
-}
-
-static void reconnect(android_port_t *p, uint32_t timeout_ms)
-{
-    (*p->env)->CallBooleanMethod(p->env, p->bridge, p->m_reconnect, (jint)timeout_ms);
-    clear_exception(p->env);
-}
-
 bool android_port_create(android_port_t *p, JNIEnv *env, jobject bridge)
 {
     jclass cls = (*env)->GetObjectClass(env, bridge);
@@ -66,13 +54,16 @@ bool android_port_create(android_port_t *p, JNIEnv *env, jobject bridge)
     p->m_read         = (*env)->GetMethodID(env, cls, "read", "([BII)I");
     p->m_set_lines    = (*env)->GetMethodID(env, cls, "setLines", "(ZZ)V");
     p->m_set_baud     = (*env)->GetMethodID(env, cls, "setBaudRate", "(I)Z");
-    p->m_is_usb_jtag  = (*env)->GetMethodID(env, cls, "isUsbJtag", "()Z");
-    p->m_reconnect    = (*env)->GetMethodID(env, cls, "reconnect", "(I)Z");
+    jmethodID m_is_usb_jtag = (*env)->GetMethodID(env, cls, "isUsbJtag", "()Z");
     p->m_log          = (*env)->GetMethodID(env, cls, "log", "(ILjava/lang/String;)V");
     (*env)->DeleteLocalRef(env, cls);
 
     if (clear_exception(env) || !p->m_write || !p->m_read || !p->m_set_lines || !p->m_set_baud
-            || !p->m_is_usb_jtag || !p->m_reconnect || !p->m_log) {
+            || !m_is_usb_jtag || !p->m_log) {
+        return false;
+    }
+    p->is_usb_jtag = (*env)->CallBooleanMethod(env, bridge, m_is_usb_jtag);
+    if (clear_exception(env)) {
         return false;
     }
 
@@ -174,7 +165,9 @@ static esp_loader_error_t android_change_rate(esp_loader_port_t *port, uint32_t 
 
 /* Reset sequences mirror linux_port.c (esptool HardReset / UnixTightReset /
  * USBJTAGSerialReset). Unlike TIOCMSET, the USB API sets DTR and RTS with two
- * separate control transfers, so line changes are not atomic. */
+ * separate control transfers, so line changes are not atomic.
+ * If the USB-Serial-JTAG drops off the bus on reset, UsbSerialBridge reopens it
+ * on the next failed read/write. */
 static void android_reset_target(esp_loader_port_t *port)
 {
     android_port_t *p = container_of(port, android_port_t, port);
@@ -182,16 +175,13 @@ static void android_reset_target(esp_loader_port_t *port)
     set_lines(p, false, RTS_RESET_ASSERT);
     sleep_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
     set_lines(p, false, RTS_RESET_DEASSERT);
-    if (is_usb_jtag(p)) {
-        reconnect(p, 3000);
-    }
 }
 
 static void android_enter_bootloader(esp_loader_port_t *port)
 {
     android_port_t *p = container_of(port, android_port_t, port);
 
-    if (is_usb_jtag(p)) {
+    if (p->is_usb_jtag) {
         set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_DEASSERT); /* idle */
         sleep_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
         set_lines(p, DTR_BOOT_ASSERT,   RTS_RESET_DEASSERT); /* assert BOOT */
@@ -200,7 +190,6 @@ static void android_enter_bootloader(esp_loader_port_t *port)
         set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_ASSERT);   /* release BOOT via (1,1) */
         sleep_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
         set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_DEASSERT); /* release RESET */
-        reconnect(p, 3000);
     } else {
         set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_DEASSERT);
         set_lines(p, DTR_BOOT_ASSERT,   RTS_RESET_ASSERT);
