@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
@@ -128,33 +130,34 @@ fun FlasherScreen(vm: FlasherViewModel) {
         }
 
         DeviceHeader(state, vm)
-        PrimaryTabRow(selectedTabIndex = state.page.ordinal) {
-            Tab(
-                selected = state.page == Page.FLASH,
-                onClick = { vm.selectPage(Page.FLASH) },
-                text = { Text("Flash") },
-            )
-            Tab(
-                selected = state.page == Page.DEVICE,
-                onClick = { vm.selectPage(Page.DEVICE) },
-                text = { Text("Device") },
-            )
-            Tab(
-                selected = state.page == Page.EFUSE,
-                onClick = { vm.selectPage(Page.EFUSE) },
-                text = { Text("eFuse") },
-            )
-            Tab(
-                selected = state.page == Page.MONITOR,
-                onClick = { vm.selectPage(Page.MONITOR) },
-                text = { Text(if (state.monitoring) "Monitor ●" else "Monitor") },
-            )
+        // Tabs and swiping both drive state.page; the pager follows it (also when the
+        // ViewModel switches page itself, e.g. to Monitor after flashing).
+        val pager = rememberPagerState(initialPage = state.page.ordinal) { Page.entries.size }
+        LaunchedEffect(state.page) { pager.animateScrollToPage(state.page.ordinal) }
+        LaunchedEffect(pager.settledPage) { vm.selectPage(Page.entries[pager.settledPage]) }
+
+        // The tab row follows the pager directly (switches at half a swipe) instead of waiting
+        // for state.page, which only changes once the swipe settles.
+        PrimaryTabRow(selectedTabIndex = pager.currentPage) {
+            Page.entries.forEach { page ->
+                val label = when (page) {
+                    Page.FLASH -> "Flash"
+                    Page.DEVICE -> "Device"
+                    Page.EFUSE -> "eFuse"
+                    Page.MONITOR -> if (state.monitoring) "Monitor ●" else "Monitor"
+                }
+                Tab(selected = pager.currentPage == page.ordinal, onClick = { vm.selectPage(page) }, text = { Text(label) })
+            }
         }
-        when (state.page) {
-            Page.FLASH -> FlashPage(state, vm)
-            Page.DEVICE -> DevicePage(state, vm)
-            Page.EFUSE -> EfusePage(state, vm)
-            Page.MONITOR -> MonitorPage(state, vm)
+        HorizontalPager(pager, Modifier.weight(1f), verticalAlignment = Alignment.Top) { index ->
+            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (Page.entries[index]) {
+                    Page.FLASH -> FlashPage(state, vm)
+                    Page.DEVICE -> DevicePage(state, vm)
+                    Page.EFUSE -> EfusePage(state, vm)
+                    Page.MONITOR -> MonitorPage(state, vm)
+                }
+            }
         }
     }
 }
@@ -346,8 +349,8 @@ private fun ColumnScope.DevicePage(state: UiState, vm: FlasherViewModel) {
 
 @Composable
 private fun ColumnScope.EfusePage(state: UiState, vm: FlasherViewModel) {
-    LaunchedEffect(Unit) {
-        if (state.efuses == null && !state.busy) vm.readEfuses()
+    LaunchedEffect(state.page) {
+        if (state.page == Page.EFUSE && state.efuses == null && !state.busy) vm.readEfuses()
     }
     val efuses = state.efuses
     if (efuses == null) {
