@@ -1,4 +1,4 @@
-package com.espflasher
+package io.github.dzarda7.espflasher
 
 import android.app.Application
 import android.app.PendingIntent
@@ -512,7 +512,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
-        private const val ACTION_USB_PERMISSION = "com.espflasher.USB_PERMISSION"
+        private const val ACTION_USB_PERMISSION = "io.github.dzarda7.espflasher.USB_PERMISSION"
         private const val ROM_BAUD = 115200
         private const val MONITOR_BAUD = 115200
         private const val MAX_MONITOR_LINES = 2000

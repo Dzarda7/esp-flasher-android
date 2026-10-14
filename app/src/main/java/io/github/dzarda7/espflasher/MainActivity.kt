@@ -1,4 +1,4 @@
-package com.espflasher
+package io.github.dzarda7.espflasher
 
 import android.content.ClipData
 import android.content.ClipboardManager

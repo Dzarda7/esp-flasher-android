@@ -1,4 +1,4 @@
-package com.espflasher
+package io.github.dzarda7.espflasher
 
 import java.io.Closeable
 

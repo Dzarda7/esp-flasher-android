@@ -8,11 +8,11 @@ val flasherVersion = flasherDir.resolve("idf_component.yml").readLines()
     .firstOrNull { it.startsWith("version:") }?.substringAfter(":")?.trim()?.trim('"') ?: "unknown"
 
 android {
-    namespace = "com.espflasher"
+    namespace = "io.github.dzarda7.espflasher"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.espflasher"
+        applicationId = "io.github.dzarda7.espflasher"
         minSdk = 26
         targetSdk = 37
         versionCode = 1

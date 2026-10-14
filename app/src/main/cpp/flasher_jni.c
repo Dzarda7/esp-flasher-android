@@ -1,5 +1,5 @@
 /*
- * JNI entry points for com.espflasher.Flasher.
+ * JNI entry points for io.github.dzarda7.espflasher.Flasher.
  *
  * A session owns one port + loader. All calls on a session must be serialized
  * (the Kotlin side runs them on a single worker thread).
@@ -28,7 +28,7 @@ static session_t *session_get(JNIEnv *env, jlong handle)
     return s;
 }
 
-#define JNI_FN(name) Java_com_espflasher_Flasher_##name
+#define JNI_FN(name) Java_io_github_dzarda7_espflasher_Flasher_##name
 
 JNIEXPORT jlong JNICALL JNI_FN(nativeCreate)(JNIEnv *env, jobject thiz, jobject bridge)
 {

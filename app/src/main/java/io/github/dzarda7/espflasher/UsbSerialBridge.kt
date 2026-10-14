@@ -1,4 +1,4 @@
-package com.espflasher
+package io.github.dzarda7.espflasher
 
 import android.hardware.usb.UsbManager
 import android.os.SystemClock

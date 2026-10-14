@@ -55,7 +55,7 @@ app/src/main/
 │   ├── CMakeLists.txt     builds esp-serial-flasher and the JNI library
 │   ├── android_port.c     esp-serial-flasher port: I/O, reset sequences and timing via JNI
 │   └── flasher_jni.c      JNI entry points (connect, flash, read, eFuse, ...)
-└── java/com/espflasher/
+└── java/io/github/dzarda7/espflasher/
     ├── UsbSerialBridge.kt USB transport on usb-serial-for-android
     ├── Flasher.kt         one loader session: Kotlin API over the JNI functions
     ├── FlasherViewModel.kt
