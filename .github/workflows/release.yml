@@ -1,24 +1,35 @@
 ---
-# Runs on a version tag pushed by `cz bump` + `git push --tags`: builds the signed APK
+# Runs on a version tag pushed by `cz bump` + `git push --follow-tags`: builds the signed APK
 # and AAB and publishes them as a GitHub release, with the notes from CHANGELOG.md.
 name: Release
 on:
   push:
     tags: [v*]
-permissions:
-  contents: write
+permissions: {}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   release:
+    name: Publish release
     runs-on: ubuntu-latest
+    # The signing secrets live in this environment, which only v* tags may deploy from.
+    environment: release
+    permissions:
+      contents: write  # create the GitHub release
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
-      - uses: actions/setup-java@v5
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
         with:
           distribution: temurin
           java-version: 21
-      - uses: gradle/actions/setup-gradle@v4
+      # No Gradle cache: a release must not build from state other workflows wrote.
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6  # v6.4.0
+        with:
+          cache-disabled: true
       - name: Decode the signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -40,4 +51,4 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "esp-flasher-$version.apk"
           cp app/build/outputs/bundle/release/app-release.aab "esp-flasher-$version.aab"
           gh release create "$GITHUB_REF_NAME" "esp-flasher-$version.apk" "esp-flasher-$version.aab" \
-            --title "$GITHUB_REF_NAME" --notes-file notes.md
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md
