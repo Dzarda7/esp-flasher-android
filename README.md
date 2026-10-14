@@ -34,9 +34,14 @@ Chips in secure download mode are not supported.
 Requires Android Studio (it bundles the JDK, the Android SDK and Gradle). The NDK and CMake
 are installed by Gradle on the first build.
 
-The library is taken from a local checkout of esp-serial-flasher, by default
-`../../Espressif/esp-serial-flasher` relative to this repo. Change `espSerialFlasherDir` in
-`gradle.properties` to point elsewhere.
+esp-serial-flasher is a git submodule pinned to a release, so clone with
+
+```sh
+git clone --recursive https://github.com/Dzarda7/esp-flasher-android.git
+```
+
+or run `git submodule update --init` in an existing clone. To build against your own checkout
+of the library instead, set `espSerialFlasherDir` in `gradle.properties`.
 
 Open the folder in Android Studio and press Run, or from the command line:
 
