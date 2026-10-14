@@ -3,6 +3,7 @@ package com.espflasher
 import android.hardware.usb.UsbManager
 import android.os.SystemClock
 import android.util.Log
+import com.hoho.android.usbserial.driver.SerialTimeoutException
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
@@ -59,6 +60,9 @@ class UsbSerialBridge(
             try {
                 port.write(bytes, timeoutMs.coerceAtLeast(1))
                 return true
+            } catch (e: SerialTimeoutException) {
+                // Device is still there, just not reading (e.g. busy booting). Not a disconnect.
+                return false
             } catch (e: IOException) {
                 Log.w(TAG, "write failed: ${e.message}")
                 if (!reconnect()) return false

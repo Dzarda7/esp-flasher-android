@@ -29,9 +29,16 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
 
-data class ChipInfo(val chip: String, val mac: String, val flashSize: Int?)
+data class ChipInfo(
+    val chip: String,
+    val mac: String,
+    val flashSize: Int?,
+    val revision: String?,
+    /** Null if the chip doesn't report it (e.g. ESP32, ESP8266). */
+    val security: List<Pair<String, Boolean>>?,
+)
 
-enum class Page { FLASH, MONITOR }
+enum class Page { FLASH, DEVICE, MONITOR }
 
 data class UiState(
     val devices: List<UsbSerialDriver> = emptyList(),
@@ -40,10 +47,12 @@ data class UiState(
     val firmwareUri: Uri? = null,
     val firmwareName: String? = null,
     val offsetText: String = "0x0",
+    val readOffsetText: String = "0x0",
+    val readSizeText: String = "",
     val baudRate: Int = DEFAULT_FLASH_BAUD,
     val monitorAfterFlash: Boolean = true,
     val busy: Boolean = false,
-    val progress: Float? = null,
+    val progress: Float = 0f,
     val monitoring: Boolean = false,
     val page: Page = Page.FLASH,
     /** One line saying what is happening or how the last action ended. */
@@ -79,11 +88,20 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         refreshDevices()
     }
 
+    // getDeviceList() is a binder call that can block for seconds while devices churn
+    // (e.g. a chip with erased flash boot-looping), so keep it off the main thread.
     fun refreshDevices() {
-        _state.update { it.copy(devices = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val devices = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+            _state.update { it.copy(devices = devices) }
+        }
     }
 
     fun setOffset(text: String) = _state.update { it.copy(offsetText = text) }
+
+    fun setReadOffset(text: String) = _state.update { it.copy(readOffsetText = text) }
+
+    fun setReadSize(text: String) = _state.update { it.copy(readSizeText = text) }
 
     fun setBaudRate(baud: Int) = _state.update { it.copy(baudRate = baud) }
 
@@ -103,13 +121,9 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun connect(driver: UsbSerialDriver) = runTask {
-        if (!requestPermission(driver.device)) {
-            status("USB permission denied", error = true)
-            return@runTask
-        }
         disconnectInternal()
-
-        val bridge = UsbSerialBridge(usbManager, driver) { _, msg -> log(msg) }
+        status("Opening ${driver.device.productName ?: "device"}…")
+        val bridge = openBridge(driver.device.vendorId, driver.device.productId)
         val s = try {
             Flasher(bridge)
         } catch (e: Exception) {
@@ -120,17 +134,21 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(connectedDevice = driver.device.productName ?: driver.device.deviceName) }
 
         val info = try {
-            enterBootloader(s)
+            val flashSize = enterBootloader(s)
             ChipInfo(
                 chip = s.chip(),
                 mac = s.readMac(),
-                flashSize = runCatching { s.detectFlashSize() }.getOrNull(),
+                flashSize = flashSize,
+                revision = runCatching { s.chipRevision() }.getOrNull(),
+                security = runCatching { s.securityInfo() }.getOrNull(),
             )
         } catch (e: Exception) {
             disconnectInternal()
             throw e
         }
-        _state.update { it.copy(chipInfo = info) }
+        _state.update {
+            it.copy(chipInfo = info, readSizeText = info.flashSize?.let { size -> "0x%X".format(size) } ?: "")
+        }
         log("MAC ${info.mac}")
         status("Connected to ${info.chip}")
     }
@@ -142,14 +160,10 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         val data = getApplication<Application>().contentResolver.openInputStream(uri)
             ?.use { it.readBytes() } ?: error("Cannot read firmware file")
 
-        if (!inBootloader) enterBootloader(s) else applyBaudRate(s)
-
+        ensureBootloader(s)
         status("Flashing ${data.size / 1024} KB at 0x%X…".format(offset))
-        _state.update { it.copy(progress = 0f) }
         val start = SystemClock.elapsedRealtime()
-        s.flash(data, offset) { written, total ->
-            _state.update { it.copy(progress = written.toFloat() / total) }
-        }
+        s.flash(data, offset, progress)
         val seconds = (SystemClock.elapsedRealtime() - start) / 1000.0
         status("Flashed and verified in %.1f s (%.0f kbit/s)".format(seconds, data.size * 8 / 1000.0 / seconds))
 
@@ -160,6 +174,30 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
             inBootloader = false
             log("Target reset")
         }
+    }
+
+    fun eraseFlash() = runTask {
+        val s = flasher ?: error("Not connected")
+        ensureBootloader(s)
+        status("Erasing flash, this can take a minute…")
+        val start = SystemClock.elapsedRealtime()
+        s.eraseFlash()
+        status("Flash erased in %.1f s".format((SystemClock.elapsedRealtime() - start) / 1000.0))
+    }
+
+    /** Reads the range set on the Device page and writes it to [uri]. */
+    fun readFlash(uri: Uri) = runTask {
+        val s = flasher ?: error("Not connected")
+        val offset = parseOffset(_state.value.readOffsetText)
+        val size = parseOffset(_state.value.readSizeText)
+        ensureBootloader(s)
+        status("Reading ${size / 1024} KB at 0x%X…".format(offset))
+        val start = SystemClock.elapsedRealtime()
+        val data = s.readFlash(offset, size, progress)
+        getApplication<Application>().contentResolver.openOutputStream(uri)?.use { it.write(data) }
+            ?: error("Cannot write output file")
+        val seconds = (SystemClock.elapsedRealtime() - start) / 1000.0
+        status("Read ${size / 1024} KB in %.1f s (%.0f kbit/s)".format(seconds, size * 8 / 1000.0 / seconds))
     }
 
     /** Resets the target into its application and shows its serial output. */
@@ -189,17 +227,53 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         flasher?.close()
         flasher = null
         inBootloader = false
-        _state.update { it.copy(connectedDevice = null, chipInfo = null, progress = null) }
+        _state.update { it.copy(connectedDevice = null, chipInfo = null, progress = 0f) }
     }
 
-    /** Resets the target into the ROM bootloader, loads the stub and switches to the selected baud rate. */
-    private fun enterBootloader(s: Flasher) {
+    /**
+     * Opens the current instance of the device with this VID:PID, retrying for a few seconds.
+     * A chip that is boot-looping (e.g. erased flash on USB-Serial-JTAG) re-enumerates every
+     * reset, so the device picked from the list may already be gone; once the port is open,
+     * entering the bootloader stops the loop.
+     */
+    private suspend fun openBridge(vendorId: Int, productId: Int): UsbSerialBridge {
+        val deadline = SystemClock.elapsedRealtime() + 5000
+        while (true) {
+            val driver = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+                .firstOrNull { it.device.vendorId == vendorId && it.device.productId == productId }
+            if (driver != null) {
+                if (!requestPermission(driver.device)) error("USB permission denied")
+                try {
+                    return UsbSerialBridge(usbManager, driver) { _, msg -> log(msg) }
+                } catch (e: Exception) {
+                    log("Open failed, retrying: ${e.message}")
+                }
+            }
+            if (SystemClock.elapsedRealtime() > deadline) error("Device disappeared. Hold BOOT and reset the board, then try again")
+            SystemClock.sleep(50)
+        }
+    }
+
+    private val progress = Flasher.ProgressListener { done, total ->
+        _state.update { it.copy(progress = done.toFloat() / total) }
+    }
+
+    /**
+     * Resets the target into the ROM bootloader, loads the stub and switches to the selected
+     * baud rate. Returns the detected flash size, which the loader also needs for reads.
+     */
+    private fun enterBootloader(s: Flasher): Int? {
         s.bridge.setBaudRate(ROM_BAUD)
         currentBaud = ROM_BAUD
         status("Connecting…")
         s.connect()
         inBootloader = true
         applyBaudRate(s)
+        return runCatching { s.detectFlashSize() }.getOrNull()
+    }
+
+    private fun ensureBootloader(s: Flasher) {
+        if (!inBootloader) enterBootloader(s) else applyBaudRate(s)
     }
 
     private fun applyBaudRate(s: Flasher) {
@@ -248,7 +322,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     /** Runs [block] on the worker, stopping the monitor first since both use the serial port. */
     private fun runTask(block: suspend () -> Unit) {
         if (_state.value.busy) return
-        _state.update { it.copy(busy = true) }
+        _state.update { it.copy(busy = true, progress = 0f) }
         val monitor = monitorJob
         monitor?.cancel()
         viewModelScope.launch(worker) {

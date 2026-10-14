@@ -22,10 +22,13 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -105,6 +108,11 @@ fun FlasherScreen(vm: FlasherViewModel) {
                 text = { Text("Flash") },
             )
             Tab(
+                selected = state.page == Page.DEVICE,
+                onClick = { vm.selectPage(Page.DEVICE) },
+                text = { Text("Device") },
+            )
+            Tab(
                 selected = state.page == Page.MONITOR,
                 onClick = { vm.selectPage(Page.MONITOR) },
                 text = { Text(if (state.monitoring) "Monitor ●" else "Monitor") },
@@ -112,6 +120,7 @@ fun FlasherScreen(vm: FlasherViewModel) {
         }
         when (state.page) {
             Page.FLASH -> FlashPage(state, vm)
+            Page.DEVICE -> DevicePage(state, vm)
             Page.MONITOR -> MonitorPage(state, vm)
         }
     }
@@ -191,8 +200,95 @@ private fun ColumnScope.FlashPage(state: UiState, vm: FlasherViewModel) {
             enabled = !state.busy && state.chipInfo != null && state.firmwareUri != null,
         ) { Text("Flash") }
     }
-    LinearProgressIndicator(progress = { state.progress ?: 0f }, modifier = Modifier.fillMaxWidth())
+    Progress(state)
     StatusAndLog(state, vm)
+}
+
+@Composable
+private fun ColumnScope.DevicePage(state: UiState, vm: FlasherViewModel) {
+    val info = state.chipInfo ?: return
+    var confirmErase by remember { mutableStateOf(false) }
+    val saveFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) {
+        uri -> uri?.let(vm::readFlash)
+    }
+
+    Column(Modifier.verticalScroll(rememberScrollState()).weight(1f, fill = false)) {
+        InfoRow("Revision", info.revision ?: "unknown")
+        Text("Security", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.titleSmall)
+        if (info.security == null) {
+            Text("Not reported by this chip", style = MaterialTheme.typography.bodySmall)
+        }
+        info.security?.forEach { (name, on) -> InfoRow(name, if (on) "Yes" else "No", highlight = on) }
+    }
+
+    Text("Read flash to file", style = MaterialTheme.typography.titleSmall)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = state.readOffsetText,
+            onValueChange = vm::setReadOffset,
+            label = { Text("Offset") },
+            singleLine = true,
+            enabled = !state.busy,
+            modifier = Modifier.weight(1f),
+        )
+        OutlinedTextField(
+            value = state.readSizeText,
+            onValueChange = vm::setReadSize,
+            label = { Text("Size") },
+            singleLine = true,
+            enabled = !state.busy,
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = { saveFile.launch("${info.chip}_${info.mac.replace(":", "")}_${state.readOffsetText}.bin") },
+            enabled = !state.busy,
+        ) { Text("Read…") }
+        Box(Modifier.weight(1f))
+        OutlinedButton(onClick = { confirmErase = true }, enabled = !state.busy) {
+            Text("Erase flash", color = MaterialTheme.colorScheme.error)
+        }
+    }
+    Progress(state)
+    StatusAndLog(state, vm)
+
+    if (confirmErase) {
+        AlertDialog(
+            onDismissRequest = { confirmErase = false },
+            title = { Text("Erase flash?") },
+            text = { Text("This erases the entire flash of the ${info.chip}, including the bootloader and all data.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmErase = false
+                    vm.eraseFlash()
+                }) { Text("Erase", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmErase = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun InfoRow(name: String, value: String, highlight: Boolean = false) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (highlight) MaterialTheme.colorScheme.primary else Color.Unspecified,
+        )
+    }
+}
+
+/** Determinate while an operation reports progress, indeterminate while busy without it. */
+@Composable
+private fun Progress(state: UiState) {
+    if (state.busy && state.progress == 0f) {
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+    } else {
+        LinearProgressIndicator(progress = { state.progress }, modifier = Modifier.fillMaxWidth())
+    }
 }
 
 /** Status line, with the detailed log behind a toggle. */

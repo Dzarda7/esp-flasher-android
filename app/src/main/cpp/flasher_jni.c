@@ -156,3 +156,67 @@ JNIEXPORT void JNICALL JNI_FN(nativeReset)(JNIEnv *env, jobject thiz, jlong hand
     (void)thiz;
     esp_loader_reset_target(&session_get(env, handle)->loader);
 }
+
+JNIEXPORT jint JNICALL JNI_FN(nativeGetChipRevision)(JNIEnv *env, jobject thiz, jlong handle, jintArray out)
+{
+    (void)thiz;
+    session_t *s = session_get(env, handle);
+    uint16_t revision = 0;
+    esp_loader_error_t err = esp_loader_get_chip_revision(&s->loader, &revision);
+    if (err == ESP_LOADER_SUCCESS) {
+        jint v = revision;
+        (*env)->SetIntArrayRegion(env, out, 0, 1, &v);
+    }
+    return err;
+}
+
+/* out[] order must match Flasher.securityInfo(). */
+JNIEXPORT jint JNICALL JNI_FN(nativeGetSecurityInfo)(JNIEnv *env, jobject thiz, jlong handle, jintArray out)
+{
+    (void)thiz;
+    session_t *s = session_get(env, handle);
+    esp_loader_target_security_info_t info = {0};
+    esp_loader_error_t err = esp_loader_get_security_info(&s->loader, &info);
+    if (err == ESP_LOADER_SUCCESS) {
+        jint v[] = {
+            info.secure_boot_enabled,
+            info.secure_boot_aggressive_revoke_enabled,
+            info.secure_download_mode_enabled,
+            info.secure_boot_revoked_keys[0],
+            info.secure_boot_revoked_keys[1],
+            info.secure_boot_revoked_keys[2],
+            info.flash_encryption_enabled,
+            info.jtag_software_disabled,
+            info.jtag_hardware_disabled,
+            info.usb_disabled,
+            info.dcache_in_uart_download_disabled,
+            info.icache_in_uart_download_disabled,
+        };
+        (*env)->SetIntArrayRegion(env, out, 0, sizeof(v) / sizeof(v[0]), v);
+    }
+    return err;
+}
+
+JNIEXPORT jint JNICALL JNI_FN(nativeEraseFlash)(JNIEnv *env, jobject thiz, jlong handle)
+{
+    (void)thiz;
+    return esp_loader_flash_erase(&session_get(env, handle)->loader);
+}
+
+JNIEXPORT jint JNICALL JNI_FN(nativeReadFlash)(JNIEnv *env, jobject thiz, jlong handle, jbyteArray out,
+                                               jint offset, jint chunk_offset, jint chunk_size)
+{
+    (void)thiz;
+    session_t *s = session_get(env, handle);
+    uint8_t *buf = malloc((size_t)chunk_size);
+    if (buf == NULL) {
+        return ESP_LOADER_ERROR_FAIL;
+    }
+    esp_loader_error_t err = esp_loader_flash_read(&s->loader, buf, (uint32_t)(offset + chunk_offset),
+                                                   (uint32_t)chunk_size);
+    if (err == ESP_LOADER_SUCCESS) {
+        (*env)->SetByteArrayRegion(env, out, chunk_offset, chunk_size, (const jbyte *)buf);
+    }
+    free(buf);
+    return err;
+}
