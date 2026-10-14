@@ -1,3 +1,11 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Jaroslav Burian
+ * SPDX-License-Identifier: MIT
+ *
+ * The reset sequences are adapted from linux_port.c of esp-serial-flasher
+ * (Copyright Espressif Systems (Shanghai) CO LTD, Apache-2.0).
+ */
+
 #include "android_port.h"
 
 #include <android/log.h>

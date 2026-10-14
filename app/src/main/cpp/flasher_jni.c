@@ -1,4 +1,7 @@
 /*
+ * SPDX-FileCopyrightText: 2026 Jaroslav Burian
+ * SPDX-License-Identifier: MIT
+ *
  * JNI entry points for io.github.dzarda7.espflasher.Flasher.
  *
  * A session owns one port + loader. All calls on a session must be serialized

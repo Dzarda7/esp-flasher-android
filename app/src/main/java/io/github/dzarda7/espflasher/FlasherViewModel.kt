@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Jaroslav Burian
+ * SPDX-License-Identifier: MIT
+ */
+
 package io.github.dzarda7.espflasher
 
 import android.app.Application

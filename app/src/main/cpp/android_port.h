@@ -1,4 +1,7 @@
 /*
+ * SPDX-FileCopyrightText: 2026 Jaroslav Burian
+ * SPDX-License-Identifier: MIT
+ *
  * esp-serial-flasher port for Android.
  *
  * Android apps cannot open /dev/tty* directly, so all serial I/O is forwarded

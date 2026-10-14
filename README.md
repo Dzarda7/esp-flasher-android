@@ -83,5 +83,5 @@ Two things differ from a desktop host:
 
 ## License
 
-Apache License 2.0, see [LICENSE](LICENSE). esp-serial-flasher is Apache-2.0 and
+MIT, see [LICENSE](LICENSE). The bundled esp-serial-flasher is Apache-2.0 and
 usb-serial-for-android is MIT.
