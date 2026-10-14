@@ -52,6 +52,32 @@ Open the folder in Android Studio and press Run, or from the command line:
 The phone's USB port is needed for the board, so connect `adb` over Wi-Fi
 (*Developer options → Wireless debugging*).
 
+## Releasing
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (checked by the
+pre-commit hooks; run `pre-commit install` once). A release is cut with
+[commitizen](https://commitizen-tools.github.io/commitizen/):
+
+```sh
+cz bump          # picks the next version from the commits, updates CHANGELOG.md, tags vX.Y.Z
+git push --follow-tags
+```
+
+The tag triggers the Release workflow, which builds the signed APK and AAB and attaches them
+to a GitHub release with the changelog section as notes.
+
+Signing uses a release key stored as repository secrets. It is created once, and must be kept
+safe: an app can only be updated with the same key (on the Play Store it becomes the upload key).
+
+```sh
+keytool -genkeypair -keystore esp-flasher-release.jks -alias esp-flasher \
+    -keyalg RSA -keysize 4096 -validity 10000
+gh secret set ANDROID_KEYSTORE_BASE64 < <(base64 -w0 esp-flasher-release.jks)
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_ALIAS --body esp-flasher
+gh secret set ANDROID_KEY_PASSWORD
+```
+
 ## How it works
 
 ```

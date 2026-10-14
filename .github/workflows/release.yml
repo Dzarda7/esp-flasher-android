@@ -1,0 +1,43 @@
+---
+# Runs on a version tag pushed by `cz bump` + `git push --tags`: builds the signed APK
+# and AAB and publishes them as a GitHub release, with the notes from CHANGELOG.md.
+name: Release
+on:
+  push:
+    tags: [v*]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Decode the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+      - name: Build signed APK and AAB
+        env:
+          ANDROID_KEYSTORE: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease bundleRelease
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |-
+          version="${GITHUB_REF_NAME#v}"
+          # This version's section of the changelog: from its heading to the next one.
+          awk -v h="## $GITHUB_REF_NAME " 'index($0, h) == 1 { p = 1; next } /^## / { p = 0 } p' CHANGELOG.md > notes.md
+          cp app/build/outputs/apk/release/app-release.apk "esp-flasher-$version.apk"
+          cp app/build/outputs/bundle/release/app-release.aab "esp-flasher-$version.aab"
+          gh release create "$GITHUB_REF_NAME" "esp-flasher-$version.apk" "esp-flasher-$version.aab" \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md
