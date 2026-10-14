@@ -46,7 +46,12 @@ data class UiState(
     val progress: Float? = null,
     val monitoring: Boolean = false,
     val page: Page = Page.FLASH,
+    /** One line saying what is happening or how the last action ended. */
+    val status: String = "",
+    val statusError: Boolean = false,
+    /** Detailed log, hidden by default; for debugging and bug reports. */
     val log: List<String> = emptyList(),
+    val showLog: Boolean = false,
     /** Raw monitor lines, ANSI escapes included; the last one may still be incomplete. */
     val monitorLines: List<String> = emptyList(),
 )
@@ -88,6 +93,8 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearMonitor() = _state.update { it.copy(monitorLines = emptyList()) }
 
+    fun toggleLog() = _state.update { it.copy(showLog = !it.showLog) }
+
     fun setFirmware(uri: Uri) {
         val name = getApplication<Application>().contentResolver
             .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
@@ -97,7 +104,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
 
     fun connect(driver: UsbSerialDriver) = runTask {
         if (!requestPermission(driver.device)) {
-            log("USB permission denied")
+            status("USB permission denied", error = true)
             return@runTask
         }
         disconnectInternal()
@@ -112,14 +119,20 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         flasher = s
         _state.update { it.copy(connectedDevice = driver.device.productName ?: driver.device.deviceName) }
 
-        enterBootloader(s)
-        val info = ChipInfo(
-            chip = s.chip(),
-            mac = s.readMac(),
-            flashSize = runCatching { s.detectFlashSize() }.getOrNull(),
-        )
+        val info = try {
+            enterBootloader(s)
+            ChipInfo(
+                chip = s.chip(),
+                mac = s.readMac(),
+                flashSize = runCatching { s.detectFlashSize() }.getOrNull(),
+            )
+        } catch (e: Exception) {
+            disconnectInternal()
+            throw e
+        }
         _state.update { it.copy(chipInfo = info) }
-        log("Connected to ${info.chip}, MAC ${info.mac}")
+        log("MAC ${info.mac}")
+        status("Connected to ${info.chip}")
     }
 
     fun flash() = runTask {
@@ -131,14 +144,14 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
 
         if (!inBootloader) enterBootloader(s) else applyBaudRate(s)
 
-        log("Flashing ${data.size} bytes at 0x%X...".format(offset))
+        status("Flashing ${data.size / 1024} KB at 0x%X…".format(offset))
         _state.update { it.copy(progress = 0f) }
         val start = SystemClock.elapsedRealtime()
         s.flash(data, offset) { written, total ->
             _state.update { it.copy(progress = written.toFloat() / total) }
         }
         val seconds = (SystemClock.elapsedRealtime() - start) / 1000.0
-        log("Flash done and verified in %.1f s (%.0f kbit/s)".format(seconds, data.size * 8 / 1000.0 / seconds))
+        status("Flashed and verified in %.1f s (%.0f kbit/s)".format(seconds, data.size * 8 / 1000.0 / seconds))
 
         if (_state.value.monitorAfterFlash) {
             launchMonitor(s)
@@ -166,7 +179,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         val bytes = (text + "\n").toByteArray()
         // usb-serial-for-android allows writing while another thread is reading.
         viewModelScope.launch(Dispatchers.IO) {
-            if (!bridge.write(bytes, bytes.size, 1000)) log("Monitor: write failed")
+            if (!bridge.write(bytes, bytes.size, 1000)) status("Monitor: write failed", error = true)
         }
     }
 
@@ -183,7 +196,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     private fun enterBootloader(s: Flasher) {
         s.bridge.setBaudRate(ROM_BAUD)
         currentBaud = ROM_BAUD
-        log("Connecting...")
+        status("Connecting…")
         s.connect()
         inBootloader = true
         applyBaudRate(s)
@@ -211,13 +224,13 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
                 while (isActive) {
                     val n = s.bridge.read(buf, buf.size, 100)
                     if (n < 0) {
-                        log("Monitor: connection lost")
+                        status("Monitor: connection lost", error = true)
                         break
                     }
                     if (n > 0) appendMonitor(String(buf, 0, n, Charsets.UTF_8))
                 }
             } catch (e: Exception) {
-                if (e !is kotlinx.coroutines.CancellationException) log("Monitor error: ${e.message}")
+                if (e !is kotlinx.coroutines.CancellationException) status("Monitor: ${e.message}", error = true)
             } finally {
                 _state.update { it.copy(monitoring = false) }
             }
@@ -243,7 +256,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
                 monitor?.join()
                 block()
             } catch (e: Exception) {
-                log("Error: ${e.message}")
+                status(e.message ?: e.toString(), error = true)
             } finally {
                 _state.update { it.copy(busy = false) }
             }
@@ -251,6 +264,11 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun log(msg: String) = _state.update { it.copy(log = (it.log + msg).takeLast(500)) }
+
+    private fun status(msg: String, error: Boolean = false) {
+        log(msg)
+        _state.update { it.copy(status = msg, statusError = error) }
+    }
 
     private suspend fun requestPermission(device: UsbDevice): Boolean {
         if (usbManager.hasPermission(device)) return true

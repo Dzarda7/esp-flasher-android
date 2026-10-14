@@ -47,7 +47,17 @@ class Flasher(val bridge: UsbSerialBridge) : Closeable {
     }
 
     private fun check(err: Int, what: String) {
-        if (err != 0) throw Exception("$what failed: ${ERROR_NAMES.getOrElse(err) { "error $err" }}")
+        if (err == 0) return
+        val name = ERROR_NAMES.getOrElse(err) { "error $err" }
+        val hint = when (name) {
+            "TIMEOUT" -> "no response from the chip. Check the cable, or hold BOOT and try again"
+            "INVALID_RESPONSE" -> "garbled response. Try a lower baud rate"
+            "INVALID_MD5" -> "verification failed. Try a lower baud rate"
+            "IMAGE_SIZE" -> "the image does not fit in flash"
+            "INVALID_TARGET", "UNSUPPORTED_CHIP" -> "this chip is not supported"
+            else -> "unexpected error"
+        }
+        throw Exception("$what failed: $hint [$name]")
     }
 
     private external fun nativeCreate(bridge: UsbSerialBridge): Long

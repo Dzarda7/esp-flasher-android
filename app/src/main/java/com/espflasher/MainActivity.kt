@@ -1,5 +1,7 @@
 package com.espflasher
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.hardware.usb.UsbManager
 import android.os.Bundle
@@ -50,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -90,8 +93,7 @@ fun FlasherScreen(vm: FlasherViewModel) {
     ) {
         if (state.connectedDevice == null) {
             DeviceList(state, vm)
-            Text("Log", style = MaterialTheme.typography.titleSmall)
-            ConsoleLines(state.log)
+            StatusAndLog(state, vm)
             return@Column
         }
 
@@ -190,7 +192,31 @@ private fun ColumnScope.FlashPage(state: UiState, vm: FlasherViewModel) {
         ) { Text("Flash") }
     }
     LinearProgressIndicator(progress = { state.progress ?: 0f }, modifier = Modifier.fillMaxWidth())
-    ConsoleLines(state.log)
+    StatusAndLog(state, vm)
+}
+
+/** Status line, with the detailed log behind a toggle. */
+@Composable
+private fun ColumnScope.StatusAndLog(state: UiState, vm: FlasherViewModel) {
+    val context = LocalContext.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            state.status,
+            Modifier.weight(1f),
+            color = if (state.statusError) MaterialTheme.colorScheme.error else Color.Unspecified,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (state.showLog) {
+            TextButton(onClick = {
+                context.getSystemService(ClipboardManager::class.java)
+                    .setPrimaryClip(ClipData.newPlainText("ESP Flasher log", state.log.joinToString("\n")))
+            }) { Text("Copy") }
+        }
+        if (state.log.isNotEmpty()) {
+            TextButton(onClick = vm::toggleLog) { Text(if (state.showLog) "Hide" else "Details") }
+        }
+    }
+    if (state.showLog) ConsoleLines(state.log)
 }
 
 @Composable
