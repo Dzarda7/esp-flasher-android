@@ -30,6 +30,10 @@ typedef struct {
 
     bool is_usb_jtag;         /*!< Built-in USB-Serial-JTAG: re-enumerates on reset */
     int64_t time_end_ms;
+
+    uint8_t rx[16384];        /*!< Received bytes not yet handed to the loader */
+    uint16_t rx_pos;
+    uint16_t rx_len;
 } android_port_t;
 
 extern const esp_loader_port_ops_t android_port_ops;

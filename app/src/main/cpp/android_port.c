@@ -2,6 +2,7 @@
 
 #include <android/log.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -106,7 +107,12 @@ static esp_loader_error_t android_write(esp_loader_port_t *port, const uint8_t *
 }
 
 /* Reads exactly `size` bytes before the timer started by start_timer() expires,
- * matching the semantics of linux_port.c. */
+ * matching the semantics of linux_port.c.
+ *
+ * The SLIP decoder reads one byte at a time, so serve those from a local buffer and refill
+ * it with one JNI call for everything available. A JNI round trip per byte left the USB IN
+ * endpoint unpolled for so long during a flash read that a USB-UART bridge's small RX FIFO
+ * overflowed and bytes were lost. */
 static esp_loader_error_t android_read(esp_loader_port_t *port, uint8_t *data, uint16_t size,
                                        uint32_t timeout)
 {
@@ -114,22 +120,26 @@ static esp_loader_error_t android_read(esp_loader_port_t *port, uint8_t *data, u
     JNIEnv *env = p->env;
     (void)timeout;
 
-    uint16_t got = 0;
-    while (got < size) {
-        int64_t remaining = p->time_end_ms - time_now_ms();
-        if (remaining <= 0) {
-            return ESP_LOADER_ERROR_TIMEOUT;
+    for (uint16_t got = 0; got < size;) {
+        if (p->rx_pos == p->rx_len) {
+            int64_t remaining = p->time_end_ms - time_now_ms();
+            if (remaining <= 0) {
+                return ESP_LOADER_ERROR_TIMEOUT;
+            }
+            jint n = (*env)->CallIntMethod(env, p->bridge, p->m_read, p->io_buf, (jint)sizeof(p->rx),
+                                           (jint)remaining);
+            if (clear_exception(env) || n < 0) {
+                return ESP_LOADER_ERROR_FAIL;
+            }
+            (*env)->GetByteArrayRegion(env, p->io_buf, 0, n, (jbyte *)p->rx);
+            p->rx_pos = 0;
+            p->rx_len = n;
+            continue;
         }
-
-        jint n = (*env)->CallIntMethod(env, p->bridge, p->m_read, p->io_buf, (jint)(size - got),
-                                       (jint)remaining);
-        if (clear_exception(env) || n < 0) {
-            return ESP_LOADER_ERROR_FAIL;
-        }
-        if (n > 0) {
-            (*env)->GetByteArrayRegion(env, p->io_buf, 0, n, (jbyte *)&data[got]);
-            got += (uint16_t)n;
-        }
+        uint16_t n = p->rx_len - p->rx_pos < size - got ? p->rx_len - p->rx_pos : size - got;
+        memcpy(&data[got], &p->rx[p->rx_pos], n);
+        p->rx_pos += n;
+        got += n;
     }
     return ESP_LOADER_SUCCESS;
 }
