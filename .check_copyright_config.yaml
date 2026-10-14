@@ -1,0 +1,11 @@
+---
+DEFAULT:
+  perform_check: true
+  allowed_licenses: [MIT]
+  license_for_new_files: MIT
+  new_notice_c: |-
+    /*
+     * SPDX-FileCopyrightText: {years} Jaroslav Burian
+     *
+     * SPDX-License-Identifier: {license}
+     */
