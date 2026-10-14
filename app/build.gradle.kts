@@ -4,7 +4,7 @@ plugins {
 }
 
 // Bumped by commitizen (`cz bump`), see .cz.toml.
-val appVersion = "0.0.0"
+val appVersion = "0.1.0"
 
 val flasherDir = rootProject.file(providers.gradleProperty("espSerialFlasherDir").get())
 val flasherVersion = flasherDir.resolve("idf_component.yml").readLines()
