@@ -8,11 +8,13 @@
  * (the Kotlin side runs them on a single worker thread).
  */
 
-#include <jni.h>
 #include <stdlib.h>
+
+#include <jni.h>
+
+#include "android_port.h"
 #include "esp_loader.h"
 #include "esp_loader_efuse.h"
-#include "android_port.h"
 
 #define FLASH_BLOCK_ROM  0x400
 #define FLASH_BLOCK_STUB 0x4000
@@ -40,8 +42,8 @@ JNIEXPORT jlong JNICALL JNI_FN(nativeCreate)(JNIEnv *env, jobject thiz, jobject 
     if (s == NULL) {
         return 0;
     }
-    if (!android_port_create(&s->port, env, bridge)
-            || esp_loader_init_serial(&s->loader, &s->port.port) != ESP_LOADER_SUCCESS) {
+    if (!android_port_create(&s->port, env, bridge) ||
+        esp_loader_init_serial(&s->loader, &s->port.port) != ESP_LOADER_SUCCESS) {
         android_port_destroy(&s->port, env);
         free(s);
         return 0;
@@ -107,8 +109,8 @@ JNIEXPORT jint JNICALL JNI_FN(nativeDetectFlashSize)(JNIEnv *env, jobject thiz, 
     return err;
 }
 
-JNIEXPORT jint JNICALL JNI_FN(nativeFlash)(JNIEnv *env, jobject thiz, jlong handle, jbyteArray data,
-                                           jint offset, jobject listener)
+JNIEXPORT jint JNICALL
+JNI_FN(nativeFlash)(JNIEnv *env, jobject thiz, jlong handle, jbyteArray data, jint offset, jobject listener)
 {
     (void)thiz;
     session_t *s = session_get(env, handle);
@@ -180,7 +182,7 @@ JNIEXPORT jint JNICALL JNI_FN(nativeGetSecurityInfo)(JNIEnv *env, jobject thiz, 
 {
     (void)thiz;
     session_t *s = session_get(env, handle);
-    esp_loader_target_security_info_t info = {0};
+    esp_loader_target_security_info_t info = { 0 };
     esp_loader_error_t err = esp_loader_get_security_info(&s->loader, &info);
     if (err == ESP_LOADER_SUCCESS) {
         jint v[] = {
@@ -208,8 +210,13 @@ JNIEXPORT jint JNICALL JNI_FN(nativeEraseFlash)(JNIEnv *env, jobject thiz, jlong
     return esp_loader_flash_erase(&session_get(env, handle)->loader);
 }
 
-JNIEXPORT jint JNICALL JNI_FN(nativeReadFlash)(JNIEnv *env, jobject thiz, jlong handle, jbyteArray out,
-                                               jint offset, jint chunk_offset, jint chunk_size)
+JNIEXPORT jint JNICALL JNI_FN(nativeReadFlash)(JNIEnv *env,
+                                               jobject thiz,
+                                               jlong handle,
+                                               jbyteArray out,
+                                               jint offset,
+                                               jint chunk_offset,
+                                               jint chunk_size)
 {
     (void)thiz;
     session_t *s = session_get(env, handle);
@@ -217,8 +224,8 @@ JNIEXPORT jint JNICALL JNI_FN(nativeReadFlash)(JNIEnv *env, jobject thiz, jlong 
     if (buf == NULL) {
         return ESP_LOADER_ERROR_FAIL;
     }
-    esp_loader_error_t err = esp_loader_flash_read(&s->loader, buf, (uint32_t)(offset + chunk_offset),
-                                                   (uint32_t)chunk_size);
+    esp_loader_error_t err =
+        esp_loader_flash_read(&s->loader, buf, (uint32_t)(offset + chunk_offset), (uint32_t)chunk_size);
     if (err == ESP_LOADER_SUCCESS) {
         (*env)->SetByteArrayRegion(env, out, chunk_offset, chunk_size, (const jbyte *)buf);
     }
@@ -232,14 +239,14 @@ JNIEXPORT jint JNICALL JNI_FN(nativeEfuseFieldCount)(JNIEnv *env, jobject thiz, 
 {
     (void)thiz;
     session_t *s = session_get(env, handle);
-    esp_loader_error_t err = esp_loader_efuse_get_field_info(esp_loader_get_target(&s->loader),
-                                                             (uint16_t)revision, &s->efuse_fields);
+    esp_loader_error_t err =
+        esp_loader_efuse_get_field_info(esp_loader_get_target(&s->loader), (uint16_t)revision, &s->efuse_fields);
     return err == ESP_LOADER_SUCCESS ? s->efuse_fields->count : -(jint)err;
 }
 
 /* Returns the field name; meta = {block, bit count, wr_dis bit, rd_dis bit} (0xFFFF = none). */
-JNIEXPORT jstring JNICALL JNI_FN(nativeEfuseFieldInfo)(JNIEnv *env, jobject thiz, jlong handle, jint index,
-                                                       jintArray meta)
+JNIEXPORT jstring JNICALL
+JNI_FN(nativeEfuseFieldInfo)(JNIEnv *env, jobject thiz, jlong handle, jint index, jintArray meta)
 {
     (void)thiz;
     const esp_loader_efuse_field_info_t *f = &session_get(env, handle)->efuse_fields->fields[index];
@@ -247,14 +254,13 @@ JNIEXPORT jstring JNICALL JNI_FN(nativeEfuseFieldInfo)(JNIEnv *env, jobject thiz
     for (size_t i = 0; f->field[i] != NULL; i++) {
         bits += f->field[i]->bit_count;
     }
-    jint v[] = {f->field[0]->efuse_block, bits, f->wr_dis_bit, f->rd_dis_bit};
+    jint v[] = { f->field[0]->efuse_block, bits, f->wr_dis_bit, f->rd_dis_bit };
     (*env)->SetIntArrayRegion(env, meta, 0, 4, v);
     return (*env)->NewStringUTF(env, f->name);
 }
 
 /* Reads the field's value from the chip into out (LSB first, (bits + 7) / 8 bytes). */
-JNIEXPORT jint JNICALL JNI_FN(nativeEfuseReadField)(JNIEnv *env, jobject thiz, jlong handle, jint index,
-                                                    jbyteArray out)
+JNIEXPORT jint JNICALL JNI_FN(nativeEfuseReadField)(JNIEnv *env, jobject thiz, jlong handle, jint index, jbyteArray out)
 {
     (void)thiz;
     session_t *s = session_get(env, handle);
@@ -263,8 +269,8 @@ JNIEXPORT jint JNICALL JNI_FN(nativeEfuseReadField)(JNIEnv *env, jobject thiz, j
     if (buf == NULL) {
         return ESP_LOADER_ERROR_FAIL;
     }
-    esp_loader_error_t err = esp_loader_efuse_read_field(&s->loader, s->efuse_fields->fields[index].field,
-                                                         buf, (size_t)size * 8);
+    esp_loader_error_t err =
+        esp_loader_efuse_read_field(&s->loader, s->efuse_fields->fields[index].field, buf, (size_t)size * 8);
     if (err == ESP_LOADER_SUCCESS) {
         (*env)->SetByteArrayRegion(env, out, 0, size, (const jbyte *)buf);
     }
@@ -274,8 +280,8 @@ JNIEXPORT jint JNICALL JNI_FN(nativeEfuseReadField)(JNIEnv *env, jobject thiz, j
 
 /* Burns value (LSB first) into field `index` of the table selected by nativeEfuseFieldCount().
  * Bits can only go 0 -> 1; the caller checks that. Irreversible. */
-JNIEXPORT jint JNICALL JNI_FN(nativeEfuseBurnField)(JNIEnv *env, jobject thiz, jlong handle, jint index,
-                                                    jbyteArray value, jint bits)
+JNIEXPORT jint JNICALL
+JNI_FN(nativeEfuseBurnField)(JNIEnv *env, jobject thiz, jlong handle, jint index, jbyteArray value, jint bits)
 {
     (void)thiz;
     session_t *s = session_get(env, handle);
@@ -286,9 +292,9 @@ JNIEXPORT jint JNICALL JNI_FN(nativeEfuseBurnField)(JNIEnv *env, jobject thiz, j
     }
     (*env)->GetByteArrayRegion(env, value, 0, size, (jbyte *)buf);
 
-    esp_loader_efuse_ctx_t ctx = {0};
-    esp_loader_error_t err = esp_loader_efuse_write_field(&s->loader, &ctx, s->efuse_fields->fields[index].field,
-                                                          buf, (size_t)bits);
+    esp_loader_efuse_ctx_t ctx = { 0 };
+    esp_loader_error_t err =
+        esp_loader_efuse_write_field(&s->loader, &ctx, s->efuse_fields->fields[index].field, buf, (size_t)bits);
     free(buf);
     if (err == ESP_LOADER_SUCCESS) {
         err = esp_loader_efuse_commit(&s->loader, &ctx);

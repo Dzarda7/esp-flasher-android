@@ -6,23 +6,24 @@
  * (Copyright Espressif Systems (Shanghai) CO LTD, Apache-2.0).
  */
 
-#include "android_port.h"
-
-#include <android/log.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+
+#include <android/log.h>
 #include <unistd.h>
 
-#define TAG "esp-flasher"
-#define IO_BUF_SIZE 65536 /* write/read sizes are uint16_t, so this always fits */
+#include "android_port.h"
+
+#define TAG                "esp-flasher"
+#define IO_BUF_SIZE        65536 /* write/read sizes are uint16_t, so this always fits */
 
 /* Same line semantics as linux_port.c: "asserted" means the line is set, which
  * on the standard auto-reset circuit pulls the target pin LOW. */
 #define DTR_BOOT_ASSERT    (!SERIAL_FLASHER_BOOT_INVERT)
-#define DTR_BOOT_DEASSERT  ( SERIAL_FLASHER_BOOT_INVERT)
+#define DTR_BOOT_DEASSERT  (SERIAL_FLASHER_BOOT_INVERT)
 #define RTS_RESET_ASSERT   (!SERIAL_FLASHER_RESET_INVERT)
-#define RTS_RESET_DEASSERT ( SERIAL_FLASHER_RESET_INVERT)
+#define RTS_RESET_DEASSERT (SERIAL_FLASHER_RESET_INVERT)
 
 static int64_t time_now_ms(void)
 {
@@ -57,18 +58,18 @@ static void set_lines(android_port_t *p, bool dtr, bool rts)
 bool android_port_create(android_port_t *p, JNIEnv *env, jobject bridge)
 {
     jclass cls = (*env)->GetObjectClass(env, bridge);
-    p->port.ops       = &android_port_ops;
-    p->env            = env;
-    p->m_write        = (*env)->GetMethodID(env, cls, "write", "([BII)Z");
-    p->m_read         = (*env)->GetMethodID(env, cls, "read", "([BII)I");
-    p->m_set_lines    = (*env)->GetMethodID(env, cls, "setLines", "(ZZ)V");
-    p->m_set_baud     = (*env)->GetMethodID(env, cls, "setBaudRate", "(I)Z");
+    p->port.ops = &android_port_ops;
+    p->env = env;
+    p->m_write = (*env)->GetMethodID(env, cls, "write", "([BII)Z");
+    p->m_read = (*env)->GetMethodID(env, cls, "read", "([BII)I");
+    p->m_set_lines = (*env)->GetMethodID(env, cls, "setLines", "(ZZ)V");
+    p->m_set_baud = (*env)->GetMethodID(env, cls, "setBaudRate", "(I)Z");
     jmethodID m_is_usb_jtag = (*env)->GetMethodID(env, cls, "isUsbJtag", "()Z");
-    p->m_log          = (*env)->GetMethodID(env, cls, "log", "(ILjava/lang/String;)V");
+    p->m_log = (*env)->GetMethodID(env, cls, "log", "(ILjava/lang/String;)V");
     (*env)->DeleteLocalRef(env, cls);
 
-    if (clear_exception(env) || !p->m_write || !p->m_read || !p->m_set_lines || !p->m_set_baud
-            || !m_is_usb_jtag || !p->m_log) {
+    if (clear_exception(env) || !p->m_write || !p->m_read || !p->m_set_lines || !p->m_set_baud || !m_is_usb_jtag ||
+        !p->m_log) {
         return false;
     }
     p->is_usb_jtag = (*env)->CallBooleanMethod(env, bridge, m_is_usb_jtag);
@@ -99,15 +100,13 @@ void android_port_destroy(android_port_t *p, JNIEnv *env)
     }
 }
 
-static esp_loader_error_t android_write(esp_loader_port_t *port, const uint8_t *data, uint16_t size,
-                                        uint32_t timeout)
+static esp_loader_error_t android_write(esp_loader_port_t *port, const uint8_t *data, uint16_t size, uint32_t timeout)
 {
     android_port_t *p = container_of(port, android_port_t, port);
     JNIEnv *env = p->env;
 
     (*env)->SetByteArrayRegion(env, p->io_buf, 0, size, (const jbyte *)data);
-    jboolean ok = (*env)->CallBooleanMethod(env, p->bridge, p->m_write, p->io_buf, (jint)size,
-                                            (jint)timeout);
+    jboolean ok = (*env)->CallBooleanMethod(env, p->bridge, p->m_write, p->io_buf, (jint)size, (jint)timeout);
     if (clear_exception(env)) {
         return ESP_LOADER_ERROR_FAIL;
     }
@@ -121,8 +120,7 @@ static esp_loader_error_t android_write(esp_loader_port_t *port, const uint8_t *
  * it with one JNI call for everything available. A JNI round trip per byte left the USB IN
  * endpoint unpolled for so long during a flash read that a USB-UART bridge's small RX FIFO
  * overflowed and bytes were lost. */
-static esp_loader_error_t android_read(esp_loader_port_t *port, uint8_t *data, uint16_t size,
-                                       uint32_t timeout)
+static esp_loader_error_t android_read(esp_loader_port_t *port, uint8_t *data, uint16_t size, uint32_t timeout)
 {
     android_port_t *p = container_of(port, android_port_t, port);
     JNIEnv *env = p->env;
@@ -134,8 +132,7 @@ static esp_loader_error_t android_read(esp_loader_port_t *port, uint8_t *data, u
             if (remaining <= 0) {
                 return ESP_LOADER_ERROR_TIMEOUT;
             }
-            jint n = (*env)->CallIntMethod(env, p->bridge, p->m_read, p->io_buf, (jint)sizeof(p->rx),
-                                           (jint)remaining);
+            jint n = (*env)->CallIntMethod(env, p->bridge, p->m_read, p->io_buf, (jint)sizeof(p->rx), (jint)remaining);
             if (clear_exception(env) || n < 0) {
                 return ESP_LOADER_ERROR_FAIL;
             }
@@ -202,35 +199,32 @@ static void android_enter_bootloader(esp_loader_port_t *port)
     if (p->is_usb_jtag) {
         set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_DEASSERT); /* idle */
         sleep_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
-        set_lines(p, DTR_BOOT_ASSERT,   RTS_RESET_DEASSERT); /* assert BOOT */
+        set_lines(p, DTR_BOOT_ASSERT, RTS_RESET_DEASSERT); /* assert BOOT */
         sleep_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
-        set_lines(p, DTR_BOOT_ASSERT,   RTS_RESET_ASSERT);   /* assert RESET */
-        set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_ASSERT);   /* release BOOT via (1,1) */
+        set_lines(p, DTR_BOOT_ASSERT, RTS_RESET_ASSERT);   /* assert RESET */
+        set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_ASSERT); /* release BOOT via (1,1) */
         sleep_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
         set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_DEASSERT); /* release RESET */
     } else {
         set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_DEASSERT);
-        set_lines(p, DTR_BOOT_ASSERT,   RTS_RESET_ASSERT);
+        set_lines(p, DTR_BOOT_ASSERT, RTS_RESET_ASSERT);
         set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_ASSERT);
         sleep_ms(SERIAL_FLASHER_RESET_HOLD_TIME_MS);
-        set_lines(p, DTR_BOOT_ASSERT,   RTS_RESET_DEASSERT);
+        set_lines(p, DTR_BOOT_ASSERT, RTS_RESET_DEASSERT);
         sleep_ms(SERIAL_FLASHER_BOOT_HOLD_TIME_MS);
         set_lines(p, DTR_BOOT_DEASSERT, RTS_RESET_DEASSERT);
     }
 }
 
-static void android_log(esp_loader_port_t *port, esp_loader_log_level_t level, const char *fmt,
-                        va_list args)
+static void android_log(esp_loader_port_t *port, esp_loader_log_level_t level, const char *fmt, va_list args)
 {
     android_port_t *p = container_of(port, android_port_t, port);
     char msg[512];
     vsnprintf(msg, sizeof(msg), fmt, args);
 
     static const int prio[] = {
-        [ESP_LOADER_LOG_LEVEL_NONE]  = ANDROID_LOG_SILENT,
-        [ESP_LOADER_LOG_LEVEL_ERROR] = ANDROID_LOG_ERROR,
-        [ESP_LOADER_LOG_LEVEL_WARN]  = ANDROID_LOG_WARN,
-        [ESP_LOADER_LOG_LEVEL_INFO]  = ANDROID_LOG_INFO,
+        [ESP_LOADER_LOG_LEVEL_NONE] = ANDROID_LOG_SILENT, [ESP_LOADER_LOG_LEVEL_ERROR] = ANDROID_LOG_ERROR,
+        [ESP_LOADER_LOG_LEVEL_WARN] = ANDROID_LOG_WARN,   [ESP_LOADER_LOG_LEVEL_INFO] = ANDROID_LOG_INFO,
         [ESP_LOADER_LOG_LEVEL_DEBUG] = ANDROID_LOG_DEBUG,
     };
     __android_log_write(prio[level], TAG, msg);
@@ -244,13 +238,13 @@ static void android_log(esp_loader_port_t *port, esp_loader_log_level_t level, c
 }
 
 const esp_loader_port_ops_t android_port_ops = {
-    .enter_bootloader         = android_enter_bootloader,
-    .reset_target             = android_reset_target,
-    .start_timer              = android_start_timer,
-    .remaining_time           = android_remaining_time,
-    .delay_ms                 = android_delay_ms,
-    .log                      = android_log,
+    .enter_bootloader = android_enter_bootloader,
+    .reset_target = android_reset_target,
+    .start_timer = android_start_timer,
+    .remaining_time = android_remaining_time,
+    .delay_ms = android_delay_ms,
+    .log = android_log,
     .change_transmission_rate = android_change_rate,
-    .write                    = android_write,
-    .read                     = android_read,
+    .write = android_write,
+    .read = android_read,
 };
