@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed icon (Android 13+): single color outline of the chip, ESP lettering and flash badge. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="3.2" android:strokeLineCap="round"
+        android:pathData="M42,29 V35 M42,73 V79 M29,42 H35 M73,42 H79 M50,29 V35 M50,73 V79 M29,50 H35 M73,50 H79 M58,29 V35 M58,73 V79 M29,58 H35 M73,58 H79 M66,29 V35 M66,73 V79 M29,66 H35 M73,66 H79 " />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:pathData="M41,35.5 H67 Q72.5,35.5 72.5,41 V67 Q72.5,72.5 67,72.5 H41 Q35.5,72.5 35.5,67 V41 Q35.5,35.5 41,35.5 Z" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="3.3" android:strokeLineCap="round"
+        android:strokeLineJoin="round" android:pathData="M46.5,44 H38.5 V58 H46.5 M38.5,51 H45 M58,45.6 Q56.6,44 54,44 Q49.6,44 49.6,47.6 Q49.6,50.6 54,51 Q58.4,51.4 58.4,54.4 Q58.4,58 54,58 Q51.4,58 49.9,56.4 M61.5,58 V44 H65.3 Q69.5,44 69.5,48 Q69.5,52 65.3,52 H61.5" />
+    <path android:fillColor="#FFFFFF" android:pathData="M61.5,70 a8.5,8.5 0 1,0 17,0 a8.5,8.5 0 1,0 -17,0 Z" />
+</vector>
