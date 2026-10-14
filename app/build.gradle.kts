@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Bumped by commitizen (`cz bump`), see .cz.toml.
+val appVersion = "0.0.0"
+
 val flasherDir = rootProject.file(providers.gradleProperty("espSerialFlasherDir").get())
 val flasherVersion = flasherDir.resolve("idf_component.yml").readLines()
     .firstOrNull { it.startsWith("version:") }?.substringAfter(":")?.trim()?.trim('"') ?: "unknown"
@@ -15,8 +18,11 @@ android {
         applicationId = "io.github.dzarda7.espflasher"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        // Play Store needs an ever increasing integer: 1.2.3 -> 10203.
+        versionCode = appVersion.split(".").map { it.toInt() }
+            .let { (major, minor, patch) -> major * 10000 + minor * 100 + patch }
+            .coerceAtLeast(1)
+        versionName = appVersion
         buildConfigField("String", "FLASHER_VERSION", "\"$flasherVersion\"")
 
         externalNativeBuild {
@@ -35,9 +41,22 @@ android {
         }
     }
 
+    // Release signing comes from the environment (GitHub secrets in CI); without it the
+    // release build is unsigned.
+    val keystore = providers.environmentVariable("ANDROID_KEYSTORE").orNull
+    if (keystore != null) {
+        signingConfigs.create("release") {
+            storeFile = file(keystore)
+            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").get()
+            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").get()
+            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").get()
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
