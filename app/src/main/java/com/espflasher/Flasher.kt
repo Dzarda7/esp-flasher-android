@@ -2,15 +2,51 @@ package com.espflasher
 
 import java.io.Closeable
 
-/** One eFuse field; [value] is LSB first. */
+/** One eFuse field; [value] is LSB first. [index] identifies it for [Flasher.burnEfuse]. */
 data class EfuseField(
+    val index: Int,
     val name: String,
     val block: Int,
     val bits: Int,
     val value: ByteArray,
     val writeProtected: Boolean,
     val readProtected: Boolean,
-)
+) {
+    val isZero get() = value.all { it.toInt() == 0 }
+
+    /** Fuses that can lock you out of flashing/booting/debugging, or lock other fuses. */
+    val isDangerous get() = DANGEROUS.containsMatchIn(name)
+
+    /**
+     * Parses [text] as a new value for this field: a number (decimal or 0x hex) for fields up
+     * to 64 bits, otherwise hex bytes in the displayed order (LSB first). Returns the value
+     * or an error message.
+     */
+    fun parseNewValue(text: String): Result<ByteArray> = runCatching {
+        val bytes = ByteArray(value.size)
+        val t = text.trim().lowercase()
+        if (bits <= 64) {
+            val v = if (t.startsWith("0x")) t.substring(2).toULong(16) else t.toULong()
+            for (i in bytes.indices) bytes[i] = (v shr (8 * i)).toByte()
+            require(bits == 64 || v shr bits == 0uL) { "Value does not fit in $bits bits" }
+        } else {
+            val hex = t.replace(" ", "")
+            require(hex.length == bytes.size * 2) { "Expected ${bytes.size} hex bytes" }
+            for (i in bytes.indices) bytes[i] = hex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+        }
+        for (i in bytes.indices) {
+            require(value[i].toInt() and bytes[i].toInt().inv() == 0) { "eFuse bits can only be set, not cleared" }
+        }
+        require(!bytes.contentEquals(value)) { "Same as the current value" }
+        bytes
+    }
+
+    companion object {
+        private val DANGEROUS = Regex(
+            "DOWNLOAD|SECURE|CRYPT|KEY|WR_DIS|RD_DIS|JTAG|USB|VDD_SPI|FLASH_TPUW|DIS_.*BOOT|XTS",
+        )
+    }
+}
 
 /**
  * One esp-serial-flasher loader (flasher_jni.c) talking over [bridge].
@@ -88,7 +124,7 @@ class Flasher(val bridge: UsbSerialBridge) : Closeable {
             protectBits[i * 2] = meta[2]
             protectBits[i * 2 + 1] = meta[3]
             onProgress.onProgress(i + 1, count)
-            EfuseField(name, meta[0], meta[1], value, writeProtected = false, readProtected = false)
+            EfuseField(i, name, meta[0], meta[1], value, writeProtected = false, readProtected = false)
         }
 
         // A field's protection is one bit of the WR_DIS / RD_DIS fields.
@@ -100,6 +136,10 @@ class Flasher(val bridge: UsbSerialBridge) : Closeable {
             f.copy(writeProtected = isSet(wrDis, protectBits[i * 2]), readProtected = isSet(rdDis, protectBits[i * 2 + 1]))
         }
     }
+
+    /** Burns [value] (LSB first) into [field]. Irreversible; bits can only be set, never cleared. */
+    fun burnEfuse(field: EfuseField, value: ByteArray) =
+        check(nativeEfuseBurnField(handle, field.index, value, field.bits), "burn ${field.name}")
 
     override fun close() {
         if (handle != 0L) nativeDestroy(handle)
@@ -120,6 +160,8 @@ class Flasher(val bridge: UsbSerialBridge) : Closeable {
             "INVALID_MD5" -> "verification failed. Try a lower baud rate"
             "IMAGE_SIZE" -> "the image does not fit in flash"
             "INVALID_TARGET", "UNSUPPORTED_CHIP" -> "this chip is not supported"
+            "EFUSE_BLOCK_IN_USE" -> "the block already holds other data (parity-coded blocks can be written only once)"
+            "EFUSE_BURN_FAILED" -> "burning failed verification; fuses may be partially burned"
             else -> "unexpected error"
         }
         throw Exception("$what failed: $hint [$name]")
@@ -140,6 +182,7 @@ class Flasher(val bridge: UsbSerialBridge) : Closeable {
     private external fun nativeEfuseFieldCount(handle: Long, revision: Int): Int
     private external fun nativeEfuseFieldInfo(handle: Long, index: Int, meta: IntArray): String
     private external fun nativeEfuseReadField(handle: Long, index: Int, out: ByteArray): Int
+    private external fun nativeEfuseBurnField(handle: Long, index: Int, value: ByteArray, bits: Int): Int
     private external fun nativeReadFlash(handle: Long, out: ByteArray, offset: Int, chunkOffset: Int, chunkSize: Int): Int
 
     companion object {

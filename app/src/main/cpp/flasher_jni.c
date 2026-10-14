@@ -268,3 +268,27 @@ JNIEXPORT jint JNICALL JNI_FN(nativeEfuseReadField)(JNIEnv *env, jobject thiz, j
     free(buf);
     return err;
 }
+
+/* Burns value (LSB first) into field `index` of the table selected by nativeEfuseFieldCount().
+ * Bits can only go 0 -> 1; the caller checks that. Irreversible. */
+JNIEXPORT jint JNICALL JNI_FN(nativeEfuseBurnField)(JNIEnv *env, jobject thiz, jlong handle, jint index,
+                                                    jbyteArray value, jint bits)
+{
+    (void)thiz;
+    session_t *s = session_get(env, handle);
+    jsize size = (*env)->GetArrayLength(env, value);
+    uint8_t *buf = malloc((size_t)size);
+    if (buf == NULL) {
+        return ESP_LOADER_ERROR_FAIL;
+    }
+    (*env)->GetByteArrayRegion(env, value, 0, size, (jbyte *)buf);
+
+    esp_loader_efuse_ctx_t ctx = {0};
+    esp_loader_error_t err = esp_loader_efuse_write_field(&s->loader, &ctx, s->efuse_fields->fields[index].field,
+                                                          buf, (size_t)bits);
+    free(buf);
+    if (err == ESP_LOADER_SUCCESS) {
+        err = esp_loader_efuse_commit(&s->loader, &ctx);
+    }
+    return err;
+}

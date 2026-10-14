@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,6 +35,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -277,24 +279,38 @@ private fun ColumnScope.DevicePage(state: UiState, vm: FlasherViewModel) {
 
 @Composable
 private fun ColumnScope.EfusePage(state: UiState, vm: FlasherViewModel) {
+    LaunchedEffect(Unit) {
+        if (state.efuses == null && !state.busy) vm.readEfuses()
+    }
     val efuses = state.efuses
     if (efuses == null) {
-        Button(onClick = vm::readEfuses, enabled = !state.busy) { Text("Read eFuses") }
         Progress(state)
         StatusAndLog(state, vm)
         return
     }
 
     val context = LocalContext.current
+    var selected by remember { mutableStateOf<EfuseField?>(null) }
     val filter = state.efuseFilter.trim()
-    val shown = if (filter.isEmpty()) efuses else efuses.filter { it.name.contains(filter, ignoreCase = true) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    val shown = efuses.filter {
+        (filter.isEmpty() || it.name.contains(filter, ignoreCase = true)) && (!state.efuseSetOnly || !it.isZero)
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = state.efuseFilter,
             onValueChange = vm::setEfuseFilter,
-            placeholder = { Text("Search ${efuses.size} fields") },
+            placeholder = { Text("Search") },
             singleLine = true,
             modifier = Modifier.weight(1f),
+        )
+        FilterChip(selected = state.efuseSetOnly, onClick = vm::toggleEfuseSetOnly, label = { Text("Set only") })
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "${shown.size} of ${efuses.size} fields · tap one for details",
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
         )
         TextButton(onClick = {
             context.getSystemService(ClipboardManager::class.java)
@@ -314,34 +330,118 @@ private fun ColumnScope.EfusePage(state: UiState, vm: FlasherViewModel) {
                     )
                 }
             }
-            item { EfuseRow(f) }
+            item { EfuseRow(f, onClick = { selected = f }) }
         }
     }
     Progress(state)
     StatusAndLog(state, vm)
+
+    selected?.let { f ->
+        EfuseDialog(f, busy = state.busy, onBurn = { value -> vm.burnEfuse(f, value) }, onDismiss = { selected = null })
+    }
 }
 
 @Composable
-private fun EfuseRow(f: EfuseField) {
+private fun EfuseRow(f: EfuseField, onClick: () -> Unit) {
     val value = f.displayValue()
-    val flags = listOfNotNull(
-        "write-protected".takeIf { f.writeProtected },
-        "read-protected".takeIf { f.readProtected },
-    )
-    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-        Row {
-            Text(f.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-            if (f.bits <= 32) Text(value, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(f.name, Modifier.weight(1f).padding(end = 8.dp), fontSize = 13.sp)
+            if (f.bits <= 32) {
+                Text(
+                    value,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    color = if (f.isZero) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                )
+            }
         }
         if (f.bits > 32) Text(value, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        val flags = listOfNotNull(
+            "write-protected".takeIf { f.writeProtected },
+            "read-protected".takeIf { f.readProtected },
+        )
         if (flags.isNotEmpty()) {
-            Text(
-                flags.joinToString(" · "),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.tertiary,
-            )
+            Text(flags.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
         }
     }
+}
+
+/** Field details, and burning a new value behind a typed confirmation. */
+@Composable
+private fun EfuseDialog(f: EfuseField, busy: Boolean, onBurn: (ByteArray) -> Unit, onDismiss: () -> Unit) {
+    val canBurn = !f.writeProtected && !f.readProtected
+    val isFlag = f.bits == 1
+    var input by remember { mutableStateOf(if (isFlag) "1" else "") }
+    var confirm by remember { mutableStateOf("") }
+    val parsed = if (canBurn && input.isNotBlank()) f.parseNewValue(input) else null
+    val newValue = parsed?.getOrNull()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(f.name, fontSize = 18.sp) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                InfoRow("Block", "BLOCK${f.block}")
+                InfoRow("Size", "${f.bits} bit${if (f.bits == 1) "" else "s"}")
+                InfoRow("Value", if (f.bits <= 32) f.displayValue() else "")
+                if (f.bits > 32) Text(f.displayValue(), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                if (f.writeProtected) Text("Write-protected: this field can no longer be changed.")
+                if (f.readProtected) Text("Read-protected: its value is hidden from software.")
+
+                if (canBurn) {
+                    Text("Burn new value", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.titleSmall)
+                    if (!isFlag) {
+                        OutlinedTextField(
+                            value = input,
+                            onValueChange = { input = it },
+                            label = { Text(if (f.bits <= 64) "New value (dec or 0x hex)" else "New value (hex bytes, LSB first)") },
+                            singleLine = f.bits <= 64,
+                            isError = parsed?.isFailure == true,
+                            supportingText = parsed?.exceptionOrNull()?.let { e -> { Text(e.message ?: "Invalid value") } },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    if (newValue != null) {
+                        Text(
+                            "${f.displayValue()}  →  ${f.copy(value = newValue).displayValue()}",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                        )
+                    } else if (isFlag && parsed?.isFailure == true) {
+                        Text("Already burned.")
+                    }
+                    if (f.isDangerous) {
+                        Text(
+                            "This fuse can permanently lock the chip: flashing, booting, debugging or other " +
+                                "fuses. Burn it only if you know exactly what it does.",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Text("Burning is permanent and cannot be undone.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = confirm,
+                        onValueChange = { confirm = it },
+                        label = { Text("Type ${f.name} to confirm") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (canBurn) {
+                TextButton(
+                    onClick = {
+                        newValue?.let(onBurn)
+                        onDismiss()
+                    },
+                    enabled = !busy && newValue != null && confirm.trim() == f.name,
+                ) { Text("Burn", color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 /** 1 bit: Yes/No; up to 32 bits: number; longer: hex bytes as stored (LSB first). */

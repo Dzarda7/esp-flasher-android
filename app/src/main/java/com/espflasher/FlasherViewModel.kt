@@ -53,6 +53,7 @@ data class UiState(
     /** Null until read. */
     val efuses: List<EfuseField>? = null,
     val efuseFilter: String = "",
+    val efuseSetOnly: Boolean = false,
     val baudRate: Int = DEFAULT_FLASH_BAUD,
     val monitorAfterFlash: Boolean = true,
     val busy: Boolean = false,
@@ -116,6 +117,8 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     fun clearMonitor() = _state.update { it.copy(monitorLines = emptyList()) }
 
     fun setEfuseFilter(text: String) = _state.update { it.copy(efuseFilter = text) }
+
+    fun toggleEfuseSetOnly() = _state.update { it.copy(efuseSetOnly = !it.efuseSetOnly) }
 
     fun toggleLog() = _state.update { it.copy(showLog = !it.showLog) }
 
@@ -208,13 +211,28 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
 
     fun readEfuses() = runTask {
         val s = flasher ?: error("Not connected")
-        val revision = _state.value.chipInfo?.revision ?: error("Chip revision unknown")
         ensureBootloader(s)
         status("Reading eFuses…")
         val start = SystemClock.elapsedRealtime()
+        val count = loadEfuses(s)
+        status("Read $count eFuse fields in %.1f s".format((SystemClock.elapsedRealtime() - start) / 1000.0))
+    }
+
+    /** Irreversibly burns [value] into [field], then reads all eFuses back. */
+    fun burnEfuse(field: EfuseField, value: ByteArray) = runTask {
+        val s = flasher ?: error("Not connected")
+        ensureBootloader(s)
+        status("Burning ${field.name}…")
+        s.burnEfuse(field, value)
+        loadEfuses(s)
+        status("Burned ${field.name}")
+    }
+
+    private fun loadEfuses(s: Flasher): Int {
+        val revision = _state.value.chipInfo?.revision ?: error("Chip revision unknown")
         val efuses = s.readEfuses(revision, progress)
         _state.update { it.copy(efuses = efuses) }
-        status("Read ${efuses.size} eFuse fields in %.1f s".format((SystemClock.elapsedRealtime() - start) / 1000.0))
+        return efuses.size
     }
 
     /** Resets the target into its application and shows its serial output. */
