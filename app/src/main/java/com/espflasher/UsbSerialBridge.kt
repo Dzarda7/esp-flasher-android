@@ -61,7 +61,8 @@ class UsbSerialBridge(
             rxError = null
         }
         (p as CommonUsbSerialPort).setReadQueue(READ_QUEUE, READ_SIZE)
-        reader = thread(name = "usb-rx", isDaemon = true) { readLoop(p) }
+        // Registered before it starts, so an immediate failure is not mistaken for close().
+        reader = thread(start = false, name = "usb-rx", isDaemon = true) { readLoop(p) }.also { it.start() }
         return p
     }
 

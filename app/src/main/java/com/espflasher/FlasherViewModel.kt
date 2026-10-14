@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hoho.android.usbserial.driver.UsbSerialDriver
@@ -21,12 +22,17 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.nio.Buffer
+import java.nio.ByteBuffer
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
 import java.util.concurrent.Executors
 
 data class ChipInfo(
@@ -81,6 +87,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     // The native flasher is single-threaded: run every flasher call here.
     private val worker = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private var flasher: Flasher? = null
+    private var connectedIds: Pair<Int, Int>? = null // VID, PID of the connected device
     private var monitorJob: Job? = null
 
     // Only touched on the worker thread.
@@ -90,9 +97,37 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    private val detachReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            refreshDevices()
+            val device = IntentCompat.getParcelableExtra(intent, UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            val ids = connectedIds
+            if (device == null || ids != device.vendorId to device.productId) return
+            viewModelScope.launch {
+                // A USB-Serial-JTAG can drop off the bus on reset and come back; the bridge
+                // reconnects to it. Only give up on the device if it stays gone.
+                delay(DETACH_GRACE_MS)
+                if (connectedIds == ids && findDriver(ids.first, ids.second) == null) {
+                    monitorJob?.cancel()
+                    // On the worker, so it runs after a task that is still failing on the dead port.
+                    launch(worker) {
+                        disconnectInternal()
+                        status("Device unplugged", error = true)
+                    }
+                }
+            }
+        }
+    }
+
     init {
         refreshDevices()
+        ContextCompat.registerReceiver(
+            app, detachReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED), ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
     }
+
+    private fun findDriver(vendorId: Int, productId: Int) = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
+        .firstOrNull { it.device.vendorId == vendorId && it.device.productId == productId }
 
     // getDeviceList() is a binder call that can block for seconds while devices churn
     // (e.g. a chip with erased flash boot-looping), so keep it off the main thread.
@@ -180,6 +215,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
             throw e
         }
         flasher = s
+        connectedIds = driver.device.vendorId to driver.device.productId
         _state.update { it.copy(connectedDevice = driver.device.productName ?: driver.device.deviceName) }
 
         val info = try {
@@ -313,6 +349,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     private fun disconnectInternal() {
         flasher?.close()
         flasher = null
+        connectedIds = null
         inBootloader = false
         _state.update { it.copy(connectedDevice = null, chipInfo = null, efuses = null, progress = 0f) }
     }
@@ -326,8 +363,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun openBridge(vendorId: Int, productId: Int): UsbSerialBridge {
         val deadline = SystemClock.elapsedRealtime() + 5000
         while (true) {
-            val driver = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
-                .firstOrNull { it.device.vendorId == vendorId && it.device.productId == productId }
+            val driver = findDriver(vendorId, productId)
             if (driver != null) {
                 if (!requestPermission(driver.device)) error("USB permission denied")
                 try {
@@ -382,13 +418,27 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
                 inBootloader = false
 
                 val buf = ByteArray(4096)
+                // Decode as a stream: a multi-byte UTF-8 character can be split across reads.
+                val decoder = Charsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPLACE)
+                    .onUnmappableCharacter(CodingErrorAction.REPLACE)
+                val bytes = ByteBuffer.allocate(buf.size + 8)
+                val chars = CharBuffer.allocate(buf.size + 8)
                 while (isActive) {
                     val n = s.bridge.read(buf, buf.size, 100)
                     if (n < 0) {
                         status("Monitor: connection lost", error = true)
                         break
                     }
-                    if (n > 0) appendMonitor(String(buf, 0, n, Charsets.UTF_8))
+                    if (n == 0) continue
+                    // Through Buffer: the covariant ByteBuffer/CharBuffer overrides of flip() and
+                    // clear() don't exist before Android 14.
+                    (bytes.put(buf, 0, n) as Buffer).flip()
+                    decoder.decode(bytes, chars, false)
+                    bytes.compact()
+                    (chars as Buffer).flip()
+                    appendMonitor(chars.toString())
+                    (chars as Buffer).clear()
                 }
             } catch (e: Exception) {
                 if (e !is kotlinx.coroutines.CancellationException) status("Monitor: ${e.message}", error = true)
@@ -455,6 +505,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        getApplication<Application>().unregisterReceiver(detachReceiver)
         monitorJob?.cancel()
         flasher?.close()
         worker.close()
@@ -465,6 +516,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
         private const val ROM_BAUD = 115200
         private const val MONITOR_BAUD = 115200
         private const val MAX_MONITOR_LINES = 2000
+        private const val DETACH_GRACE_MS = 3500L
 
         fun parseOffset(text: String): Int {
             val t = text.trim().lowercase()
