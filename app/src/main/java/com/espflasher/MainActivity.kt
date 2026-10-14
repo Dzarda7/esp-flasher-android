@@ -4,13 +4,18 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,6 +51,8 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -56,6 +63,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -69,7 +80,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
+            val dark = isSystemInDarkTheme()
+            val colors = when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+                    if (dark) dynamicDarkColorScheme(this) else dynamicLightColorScheme(this)
+                dark -> darkColorScheme()
+                else -> lightColorScheme()
+            }
+            MaterialTheme(colorScheme = colors) {
                 Surface(Modifier.fillMaxSize()) {
                     FlasherScreen(vm)
                 }
@@ -99,6 +117,13 @@ fun FlasherScreen(vm: FlasherViewModel) {
         if (state.connectedDevice == null) {
             DeviceList(state, vm)
             StatusAndLog(state, vm)
+            if (!state.showLog) Box(Modifier.weight(1f))
+            Text(
+                "Powered by esp-serial-flasher ${BuildConfig.FLASHER_VERSION}",
+                Modifier.align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             return@Column
         }
 
@@ -141,15 +166,32 @@ private fun DeviceList(state: UiState, vm: FlasherViewModel) {
         TextButton(onClick = vm::refreshDevices) { Text("Refresh") }
     }
     if (state.devices.isEmpty()) {
-        Text("No USB-serial device found. Plug in a board via OTG.")
+        Column(
+            Modifier.fillMaxWidth().padding(top = 48.dp, bottom = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            AppLogo(96.dp)
+            Text("Plug in an ESP board", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Use a USB-OTG cable. Boards with a USB-UART bridge and chips with built-in USB both work.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
     state.devices.forEach { driver ->
         val d = driver.device
         Card(Modifier.fillMaxWidth()) {
-            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(d.productName ?: driver.javaClass.simpleName)
-                    Text("%04X:%04X".format(d.vendorId, d.productId), style = MaterialTheme.typography.bodySmall)
+                    Text(d.productName ?: driver.javaClass.simpleName, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "${adapterKind(d.vendorId)} · %04X:%04X".format(d.vendorId, d.productId),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 Button(onClick = { vm.connect(driver) }, enabled = !state.busy) { Text("Connect") }
             }
@@ -157,22 +199,47 @@ private fun DeviceList(state: UiState, vm: FlasherViewModel) {
     }
 }
 
+private fun adapterKind(vendorId: Int) = when (vendorId) {
+    UsbSerialBridge.ESPRESSIF_VID -> "Built-in USB"
+    0x10C4 -> "CP210x"
+    0x1A86 -> "CH34x"
+    0x0403 -> "FTDI"
+    else -> "USB-UART"
+}
+
+/** The launcher icon, drawn in the UI (adaptive-icon mipmaps can't be painted directly). */
+@Composable
+private fun AppLogo(size: Dp) {
+    Box(Modifier.size(size).clip(CircleShape).background(Color(0xFFD9412F)), contentAlignment = Alignment.Center) {
+        Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null, Modifier.fillMaxSize())
+    }
+}
+
 @Composable
 private fun DeviceHeader(state: UiState, vm: FlasherViewModel) {
     val info = state.chipInfo
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                if (info == null) "Connecting…" else info.chip + (info.flashSize?.let { " · ${it shr 20} MB" } ?: ""),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                listOfNotNull(info?.mac, state.connectedDevice).joinToString(" · "),
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-            )
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(info?.chip ?: "Connecting…", style = MaterialTheme.typography.titleLarge)
+                if (info != null) {
+                    Text(
+                        listOfNotNull(
+                            info.revision?.let { "rev v${it / 100}.${it % 100}" },
+                            info.flashSize?.let { "${it shr 20} MB flash" },
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Text(
+                    listOfNotNull(info?.mac, state.connectedDevice).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+            TextButton(onClick = vm::disconnect, enabled = !state.busy) { Text("Disconnect") }
         }
-        OutlinedButton(onClick = vm::disconnect, enabled = !state.busy) { Text("Disconnect") }
     }
 }
 

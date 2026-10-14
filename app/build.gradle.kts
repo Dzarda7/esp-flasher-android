@@ -4,6 +4,8 @@ plugins {
 }
 
 val flasherDir = rootProject.file(providers.gradleProperty("espSerialFlasherDir").get())
+val flasherVersion = flasherDir.resolve("idf_component.yml").readLines()
+    .firstOrNull { it.startsWith("version:") }?.substringAfter(":")?.trim()?.trim('"') ?: "unknown"
 
 android {
     namespace = "com.espflasher"
@@ -15,6 +17,7 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "FLASHER_VERSION", "\"$flasherVersion\"")
 
         externalNativeBuild {
             cmake {
@@ -44,6 +47,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
