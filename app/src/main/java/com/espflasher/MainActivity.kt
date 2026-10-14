@@ -83,84 +83,146 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun FlasherScreen(vm: FlasherViewModel) {
     val state by vm.state.collectAsState()
+
+    Column(
+        Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (state.connectedDevice == null) {
+            DeviceList(state, vm)
+            Text("Log", style = MaterialTheme.typography.titleSmall)
+            ConsoleLines(state.log)
+            return@Column
+        }
+
+        DeviceHeader(state, vm)
+        PrimaryTabRow(selectedTabIndex = state.page.ordinal) {
+            Tab(
+                selected = state.page == Page.FLASH,
+                onClick = { vm.selectPage(Page.FLASH) },
+                text = { Text("Flash") },
+            )
+            Tab(
+                selected = state.page == Page.MONITOR,
+                onClick = { vm.selectPage(Page.MONITOR) },
+                text = { Text(if (state.monitoring) "Monitor ●" else "Monitor") },
+            )
+        }
+        when (state.page) {
+            Page.FLASH -> FlashPage(state, vm)
+            Page.MONITOR -> MonitorPage(state, vm)
+        }
+    }
+}
+
+@Composable
+private fun DeviceList(state: UiState, vm: FlasherViewModel) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("ESP Flasher", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+        TextButton(onClick = vm::refreshDevices) { Text("Refresh") }
+    }
+    if (state.devices.isEmpty()) {
+        Text("No USB-serial device found. Plug in a board via OTG.")
+    }
+    state.devices.forEach { driver ->
+        val d = driver.device
+        Card(Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(d.productName ?: driver.javaClass.simpleName)
+                    Text("%04X:%04X".format(d.vendorId, d.productId), style = MaterialTheme.typography.bodySmall)
+                }
+                Button(onClick = { vm.connect(driver) }, enabled = !state.busy) { Text("Connect") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceHeader(state: UiState, vm: FlasherViewModel) {
+    val info = state.chipInfo
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (info == null) "Connecting…" else info.chip + (info.flashSize?.let { " · ${it shr 20} MB" } ?: ""),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                listOfNotNull(info?.mac, state.connectedDevice).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+            )
+        }
+        OutlinedButton(onClick = vm::disconnect, enabled = !state.busy) { Text("Disconnect") }
+    }
+}
+
+@Composable
+private fun ColumnScope.FlashPage(state: UiState, vm: FlasherViewModel) {
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(vm::setFirmware)
     }
 
-    Column(
-        Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    OutlinedButton(
+        onClick = { pickFile.launch(arrayOf("*/*")) },
+        enabled = !state.busy,
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Text("ESP Flasher", style = MaterialTheme.typography.headlineSmall)
+        Text(state.firmwareName ?: "Choose firmware .bin", maxLines = 1)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = state.offsetText,
+            onValueChange = vm::setOffset,
+            label = { Text("Offset") },
+            singleLine = true,
+            enabled = !state.busy,
+            modifier = Modifier.weight(1f),
+        )
+        BaudRatePicker(state.baudRate, enabled = !state.busy, onSelect = vm::setBaudRate)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = state.monitorAfterFlash, onCheckedChange = vm::setMonitorAfterFlash)
+        Text("Monitor after flash", Modifier.weight(1f))
+        Button(
+            onClick = vm::flash,
+            enabled = !state.busy && state.chipInfo != null && state.firmwareUri != null,
+        ) { Text("Flash") }
+    }
+    LinearProgressIndicator(progress = { state.progress ?: 0f }, modifier = Modifier.fillMaxWidth())
+    ConsoleLines(state.log)
+}
 
-        // Device selection / connection
-        if (state.connectedDevice == null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("USB devices", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                OutlinedButton(onClick = vm::refreshDevices) { Text("Refresh") }
-            }
-            if (state.devices.isEmpty()) {
-                Text("No USB-serial device found. Plug in a board via OTG.")
-            }
-            state.devices.forEach { driver ->
-                val d = driver.device
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(d.productName ?: driver.javaClass.simpleName)
-                            Text(
-                                "%04X:%04X".format(d.vendorId, d.productId),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        Button(onClick = { vm.connect(driver) }, enabled = !state.busy) { Text("Connect") }
-                    }
-                }
-            }
+@Composable
+private fun ColumnScope.MonitorPage(state: UiState, vm: FlasherViewModel) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (state.monitoring) {
+            OutlinedButton(onClick = vm::stopMonitor) { Text("Stop") }
+            OutlinedButton(onClick = vm::startMonitor) { Text("Reset") }
         } else {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(state.connectedDevice!!, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                        OutlinedButton(onClick = vm::disconnect, enabled = !state.busy) { Text("Disconnect") }
-                    }
-                    state.chipInfo?.let { info ->
-                        Text("Chip: ${info.chip}")
-                        Text("MAC: ${info.mac}")
-                        info.flashSize?.let { Text("Flash: ${it / (1024 * 1024)} MB") }
-                    }
-                }
-            }
-
-            // Flashing
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { pickFile.launch(arrayOf("*/*")) }, enabled = !state.busy) {
-                    Text("Choose .bin")
-                }
-                Text(state.firmwareName ?: "No file", Modifier.weight(1f))
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = state.offsetText,
-                    onValueChange = vm::setOffset,
-                    label = { Text("Offset") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                BaudRatePicker(state.baudRate, enabled = !state.busy, onSelect = vm::setBaudRate)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = state.monitorAfterFlash, onCheckedChange = vm::setMonitorAfterFlash)
-                Text("Monitor after flash", Modifier.weight(1f))
-                Button(
-                    onClick = vm::flash,
-                    enabled = !state.busy && state.chipInfo != null && state.firmwareUri != null,
-                ) { Text("Flash") }
-            }
-            state.progress?.let { p -> LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth()) }
+            Button(onClick = vm::startMonitor, enabled = !state.busy) { Text("Run & monitor") }
         }
+        Box(Modifier.weight(1f))
+        TextButton(onClick = vm::clearMonitor) { Text("Clear") }
+    }
+    ConsoleLines(state.monitorLines)
 
-        Console(state, vm)
+    if (state.monitoring) {
+        var input by remember { mutableStateOf("") }
+        val send = {
+            vm.sendToMonitor(input)
+            input = ""
+        }
+        OutlinedTextField(
+            value = input,
+            onValueChange = { input = it },
+            placeholder = { Text("Send to device") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { send() }),
+            trailingIcon = { TextButton(onClick = send) { Text("Send") } },
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -183,55 +245,15 @@ private fun BaudRatePicker(selected: Int, enabled: Boolean, onSelect: (Int) -> U
     }
 }
 
+/** Scrolling monospace text that fills the remaining height and follows new lines. */
 @Composable
-private fun ColumnScope.Console(state: UiState, vm: FlasherViewModel) {
-    PrimaryTabRow(selectedTabIndex = state.tab.ordinal) {
-        Tab(selected = state.tab == ConsoleTab.LOG, onClick = { vm.selectTab(ConsoleTab.LOG) }, text = { Text("Log") })
-        Tab(
-            selected = state.tab == ConsoleTab.MONITOR,
-            onClick = { vm.selectTab(ConsoleTab.MONITOR) },
-            text = { Text(if (state.monitoring) "Monitor ●" else "Monitor") },
-        )
-    }
-
-    if (state.tab == ConsoleTab.MONITOR && state.connectedDevice != null) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (state.monitoring) {
-                OutlinedButton(onClick = vm::stopMonitor) { Text("Stop") }
-                OutlinedButton(onClick = vm::startMonitor) { Text("Reset") }
-            } else {
-                Button(onClick = vm::startMonitor, enabled = !state.busy) { Text("Run & monitor") }
-            }
-            Box(Modifier.weight(1f))
-            TextButton(onClick = vm::clearConsole) { Text("Clear") }
-        }
-    }
-
-    val lines = if (state.tab == ConsoleTab.LOG) state.log else state.monitorLines
+private fun ColumnScope.ConsoleLines(lines: List<String>) {
     val listState = rememberLazyListState()
-    LaunchedEffect(state.tab, lines.size) {
+    LaunchedEffect(lines.size) {
         if (lines.isNotEmpty()) listState.scrollToItem(lines.lastIndex)
     }
     LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState) {
         items(lines) { line -> ConsoleLine(line) }
-    }
-
-    if (state.tab == ConsoleTab.MONITOR && state.monitoring) {
-        var input by remember { mutableStateOf("") }
-        val send = {
-            vm.sendToMonitor(input)
-            input = ""
-        }
-        OutlinedTextField(
-            value = input,
-            onValueChange = { input = it },
-            placeholder = { Text("Send to device") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { send() }),
-            trailingIcon = { TextButton(onClick = send) { Text("Send") } },
-            modifier = Modifier.fillMaxWidth(),
-        )
     }
 }
 

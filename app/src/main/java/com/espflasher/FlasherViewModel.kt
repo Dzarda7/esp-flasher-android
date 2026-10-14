@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 
 data class ChipInfo(val chip: String, val mac: String, val flashSize: Int?)
 
-enum class ConsoleTab { LOG, MONITOR }
+enum class Page { FLASH, MONITOR }
 
 data class UiState(
     val devices: List<UsbSerialDriver> = emptyList(),
@@ -45,7 +45,7 @@ data class UiState(
     val busy: Boolean = false,
     val progress: Float? = null,
     val monitoring: Boolean = false,
-    val tab: ConsoleTab = ConsoleTab.LOG,
+    val page: Page = Page.FLASH,
     val log: List<String> = emptyList(),
     /** Raw monitor lines, ANSI escapes included; the last one may still be incomplete. */
     val monitorLines: List<String> = emptyList(),
@@ -84,11 +84,9 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setMonitorAfterFlash(enabled: Boolean) = _state.update { it.copy(monitorAfterFlash = enabled) }
 
-    fun selectTab(tab: ConsoleTab) = _state.update { it.copy(tab = tab) }
+    fun selectPage(page: Page) = _state.update { it.copy(page = page) }
 
-    fun clearConsole() = _state.update {
-        if (it.tab == ConsoleTab.LOG) it.copy(log = emptyList()) else it.copy(monitorLines = emptyList())
-    }
+    fun clearMonitor() = _state.update { it.copy(monitorLines = emptyList()) }
 
     fun setFirmware(uri: Uri) {
         val name = getApplication<Application>().contentResolver
@@ -202,7 +200,7 @@ class FlasherViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun launchMonitor(s: Flasher) {
         monitorJob = viewModelScope.launch(worker) {
-            _state.update { it.copy(monitoring = true, tab = ConsoleTab.MONITOR) }
+            _state.update { it.copy(monitoring = true, page = Page.MONITOR) }
             try {
                 s.bridge.setBaudRate(MONITOR_BAUD)
                 currentBaud = MONITOR_BAUD
