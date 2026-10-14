@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- IDs are decimal. -->
+<resources>
+    <usb-device vendor-id="12346" product-id="4097" />  <!-- 303A:1001 Espressif USB-Serial-JTAG -->
+    <usb-device vendor-id="4292" product-id="60000" />  <!-- 10C4:EA60 CP210x -->
+    <usb-device vendor-id="6790" product-id="29987" />  <!-- 1A86:7523 CH340 -->
+    <usb-device vendor-id="6790" product-id="21972" />  <!-- 1A86:55D4 CH9102 -->
+    <usb-device vendor-id="1027" product-id="24577" />  <!-- 0403:6001 FT232R -->
+    <usb-device vendor-id="1027" product-id="24592" />  <!-- 0403:6010 FT2232 -->
+    <usb-device vendor-id="1027" product-id="24596" />  <!-- 0403:6014 FT232H -->
+    <usb-device vendor-id="1027" product-id="24597" />  <!-- 0403:6015 FT231X -->
+</resources>
